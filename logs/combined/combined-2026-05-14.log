@@ -1,0 +1,53 @@
+{"level":"info","message":"Socket.io initialised","timestamp":"2026-05-14 22:28:42"}
+{"level":"info","message":"✅  Database connected","timestamp":"2026-05-14 22:28:42"}
+{"level":"info","message":"Background jobs started","timestamp":"2026-05-14 22:28:42"}
+{"level":"info","message":"🚀  FitConnect API running on port 5000","timestamp":"2026-05-14 22:28:42"}
+{"level":"info","message":"    /api/v1/auth  |  /api/v1/match  |  /api/v1/sessions  etc.","timestamp":"2026-05-14 22:28:42"}
+{"level":"info","message":"SIGINT received — shutting down","timestamp":"2026-05-14 22:28:56"}
+{"level":"info","message":"Socket.io initialised","timestamp":"2026-05-14 22:31:36"}
+{"level":"info","message":"✅  Database connected","timestamp":"2026-05-14 22:31:36"}
+{"level":"info","message":"Background jobs started","timestamp":"2026-05-14 22:31:36"}
+{"level":"info","message":"🚀  FitConnect API running on port 5000","timestamp":"2026-05-14 22:31:36"}
+{"level":"info","message":"    /api/v1/auth  |  /api/v1/match  |  /api/v1/sessions  etc.","timestamp":"2026-05-14 22:31:36"}
+{"level":"info","message":"\u001b[0mPOST /api/v1/admin/auth/login \u001b[32m200\u001b[0m 507.245 ms - 453\u001b[0m","timestamp":"2026-05-14 22:32:13"}
+{"level":"info","message":"\u001b[0mGET /api/v1/admin/dashboard/recent-activity \u001b[32m200\u001b[0m 53.264 ms - 690\u001b[0m","timestamp":"2026-05-14 22:32:13"}
+{"level":"info","message":"\u001b[0mGET /api/v1/admin/dashboard/stats \u001b[32m200\u001b[0m 91.622 ms - 870\u001b[0m","timestamp":"2026-05-14 22:32:13"}
+{"level":"info","message":"\u001b[0mGET /api/v1/admin/users?page=1&limit=20 \u001b[32m200\u001b[0m 11.717 ms - -\u001b[0m","timestamp":"2026-05-14 22:32:22"}
+{"level":"info","message":"\u001b[0mGET /api/v1/admin/sessions?page=1&limit=20 \u001b[32m200\u001b[0m 5.883 ms - 102\u001b[0m","timestamp":"2026-05-14 22:32:26"}
+{"level":"info","message":"\u001b[0mGET /api/v1/admin/matches?page=1&limit=20 \u001b[32m200\u001b[0m 7.289 ms - 102\u001b[0m","timestamp":"2026-05-14 22:32:27"}
+{"level":"info","message":"\u001b[0mGET /api/v1/admin/orders?page=1&limit=20 \u001b[32m200\u001b[0m 5.836 ms - 102\u001b[0m","timestamp":"2026-05-14 22:32:28"}
+{"level":"info","message":"\u001b[0mGET /api/v1/admin/plans \u001b[32m200\u001b[0m 7.107 ms - -\u001b[0m","timestamp":"2026-05-14 22:32:30"}
+{"level":"info","message":"\u001b[0mGET /api/v1/admin/audit-logs?page=1&limit=30 \u001b[32m200\u001b[0m 7.905 ms - 102\u001b[0m","timestamp":"2026-05-14 22:32:49"}
+{"level":"info","message":"\u001b[0mGET /api/v1/admin/admins \u001b[32m200\u001b[0m 4.055 ms - 901\u001b[0m","timestamp":"2026-05-14 22:32:51"}
+{"level":"info","message":"\u001b[0mPOST /api/v1/admin/auth/login \u001b[33m401\u001b[0m 3.272 ms - 49\u001b[0m","timestamp":"2026-05-14 22:33:13"}
+{"level":"info","message":"\u001b[0mPOST /api/v1/admin/auth/login \u001b[33m401\u001b[0m 2.522 ms - 49\u001b[0m","timestamp":"2026-05-14 22:33:41"}
+{"level":"info","message":"\u001b[0mPOST /api/v1/admin/auth/login \u001b[33m401\u001b[0m 28.712 ms - 49\u001b[0m","timestamp":"2026-05-14 22:33:59"}
+{"level":"info","message":"\u001b[0mGET /health \u001b[32m200\u001b[0m 8.022 ms - 53\u001b[0m","timestamp":"2026-05-14 22:35:24"}
+{"level":"info","message":"\u001b[0mGET /.well-known/appspecific/com.chrome.devtools.json \u001b[33m404\u001b[0m 0.392 ms - 45\u001b[0m","timestamp":"2026-05-14 22:35:24"}
+{"level":"info","message":"\u001b[0mGET /favicon.ico \u001b[33m404\u001b[0m 0.699 ms - 45\u001b[0m","timestamp":"2026-05-14 22:35:25"}
+{"level":"info","message":"\u001b[0mGET / \u001b[33m404\u001b[0m 0.350 ms - 45\u001b[0m","timestamp":"2026-05-14 22:35:31"}
+{"level":"info","message":"\u001b[0mGET /.well-known/appspecific/com.chrome.devtools.json \u001b[33m404\u001b[0m 0.359 ms - 45\u001b[0m","timestamp":"2026-05-14 22:35:31"}
+{"level":"info","message":"\u001b[0mGET /api/v1//auth/me \u001b[33m404\u001b[0m 0.372 ms - 45\u001b[0m","timestamp":"2026-05-14 22:36:00"}
+{"level":"info","message":"\u001b[0mGET /.well-known/appspecific/com.chrome.devtools.json \u001b[33m404\u001b[0m 0.330 ms - 45\u001b[0m","timestamp":"2026-05-14 22:36:00"}
+{"level":"info","message":"\u001b[0mGET /api/v1/auth/me \u001b[33m401\u001b[0m 0.700 ms - 47\u001b[0m","timestamp":"2026-05-14 22:36:09"}
+{"level":"info","message":"\u001b[0mGET /.well-known/appspecific/com.chrome.devtools.json \u001b[33m404\u001b[0m 0.512 ms - 45\u001b[0m","timestamp":"2026-05-14 22:36:09"}
+{"level":"info","message":"\u001b[0mGET /.well-known/appspecific/com.chrome.devtools.json \u001b[33m404\u001b[0m 0.303 ms - 45\u001b[0m","timestamp":"2026-05-14 22:37:01"}
+{"level":"info","message":"\u001b[0mGET /.well-known/appspecific/com.chrome.devtools.json \u001b[33m404\u001b[0m 0.398 ms - 45\u001b[0m","timestamp":"2026-05-14 22:37:02"}
+{"level":"info","message":"\u001b[0mGET /.well-known/appspecific/com.chrome.devtools.json \u001b[33m404\u001b[0m 0.310 ms - 45\u001b[0m","timestamp":"2026-05-14 22:37:03"}
+{"level":"info","message":"\u001b[0mPOST /api/v1/admin/auth/login \u001b[32m200\u001b[0m 425.355 ms - 453\u001b[0m","timestamp":"2026-05-14 22:37:07"}
+{"level":"info","message":"\u001b[0mGET /api/v1/admin/dashboard/recent-activity \u001b[36m304\u001b[0m 25.196 ms - -\u001b[0m","timestamp":"2026-05-14 22:37:07"}
+{"level":"info","message":"\u001b[0mGET /api/v1/admin/dashboard/stats \u001b[36m304\u001b[0m 61.152 ms - -\u001b[0m","timestamp":"2026-05-14 22:37:07"}
+{"level":"info","message":"\u001b[0mGET /api/v1/admin/admins \u001b[32m200\u001b[0m 8.463 ms - 901\u001b[0m","timestamp":"2026-05-14 22:46:35"}
+{"level":"info","message":"\u001b[0mGET /api/v1/admin/dashboard/recent-activity \u001b[36m304\u001b[0m 21.334 ms - -\u001b[0m","timestamp":"2026-05-14 22:46:40"}
+{"level":"info","message":"\u001b[0mGET /api/v1/admin/dashboard/stats \u001b[36m304\u001b[0m 27.516 ms - -\u001b[0m","timestamp":"2026-05-14 22:46:40"}
+{"level":"info","message":"\u001b[0mGET /api/v1/admin/users?page=1&limit=20 \u001b[36m304\u001b[0m 9.936 ms - -\u001b[0m","timestamp":"2026-05-14 22:46:51"}
+{"level":"info","message":"\u001b[0mGET /api/v1/admin/users/84914bf1-7bc4-41d8-9ab5-e65bd5d18768 \u001b[32m200\u001b[0m 14.210 ms - 916\u001b[0m","timestamp":"2026-05-14 22:46:57"}
+{"level":"info","message":"\u001b[0mGET /api/v1/admin/users?page=1&limit=20 \u001b[36m304\u001b[0m 19.465 ms - -\u001b[0m","timestamp":"2026-05-14 22:47:04"}
+{"level":"info","message":"\u001b[0mGET /api/v1/admin/sessions?page=1&limit=20 \u001b[36m304\u001b[0m 4.465 ms - -\u001b[0m","timestamp":"2026-05-14 22:47:05"}
+{"level":"info","message":"\u001b[0mGET /api/v1/admin/matches?page=1&limit=20 \u001b[36m304\u001b[0m 4.127 ms - -\u001b[0m","timestamp":"2026-05-14 22:47:07"}
+{"level":"info","message":"\u001b[0mGET /api/v1/admin/orders?page=1&limit=20 \u001b[36m304\u001b[0m 5.705 ms - -\u001b[0m","timestamp":"2026-05-14 22:47:08"}
+{"level":"info","message":"\u001b[0mGET /api/v1/admin/plans \u001b[36m304\u001b[0m 4.845 ms - -\u001b[0m","timestamp":"2026-05-14 22:47:10"}
+{"level":"info","message":"\u001b[0mGET /api/v1/admin/audit-logs?page=1&limit=30 \u001b[36m304\u001b[0m 5.625 ms - -\u001b[0m","timestamp":"2026-05-14 22:47:39"}
+{"level":"info","message":"\u001b[0mGET /api/v1/admin/users?page=1&limit=20 \u001b[36m304\u001b[0m 5.243 ms - -\u001b[0m","timestamp":"2026-05-14 22:47:42"}
+{"level":"info","message":"\u001b[0mGET /api/v1/admin/admins \u001b[36m304\u001b[0m 5.358 ms - -\u001b[0m","timestamp":"2026-05-14 22:47:46"}
+{"level":"info","message":"SIGINT received — shutting down","timestamp":"2026-05-14 22:49:10"}
