@@ -6,8 +6,6 @@ const res_       = require('../utils/response');
 // PUT /users/me
 const updateProfile = async (req, res, next) => {
   try {
-    console.log("hi,,,,,,,,,,,,,,,,,,,,");
-    
     const {
       firstName, lastName, username, bio, city, country,
       primaryActivity, activities, experienceLevel, goals,

@@ -62,7 +62,7 @@ const createOrder = async (req, res, next) => {
       razorpayKeyId:process.env.RAZORPAY_KEY_ID,
       orderId:      order.id,
     });
-  } catch (e) { console.log(e);next(e); }
+  } catch (e) { next(e); }
 };
 
 // POST /subscriptions/verify-payment

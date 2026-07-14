@@ -1,0 +1,380 @@
+// prisma/schema.prisma
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+// ─────────────────────────────────────────────────────────
+//  ENUMS
+// ─────────────────────────────────────────────────────────
+enum UserStatus        { ACTIVE INACTIVE BANNED SUSPENDED }
+enum SubscriptionPlan  { free pro elite }
+enum SessionStatus     { scheduled completed missed cancelled }
+enum MessageType       { text image session_invite proof system }
+enum NotificationType  { match session proof chat token xp payment subscription system }
+enum SwipeAction       { like skip super_like }
+enum UploadFolder      { avatars proofs covers }
+
+// ─────────────────────────────────────────────────────────
+//  USER
+// ─────────────────────────────────────────────────────────
+model User {
+  id                 String           @id @default(uuid())
+  email              String           @unique
+  passwordHash       String
+  firstName          String
+  lastName           String
+  username           String?          @unique
+  phone              String?
+  avatarUrl          String?          @db.Text
+  bio                String?          @db.Text
+  country            String?
+  city               String?
+  latitude           Decimal?         @db.Decimal(10,8)
+  longitude          Decimal?         @db.Decimal(11,8)
+
+  // Status
+  status             UserStatus       @default(ACTIVE)
+  emailVerified      Boolean          @default(false)
+  isBanned           Boolean          @default(false)
+  loginCount         Int              @default(0)
+  lastLoginAt        DateTime?
+  lastActiveAt       DateTime?
+
+  // Fitness profile
+  primaryActivity    String?
+  activities         Json             @default("[]")
+  experienceLevel    String?
+  goals              Json             @default("[]")
+  primaryGym         String?
+
+  // Gamification
+  xpTotal            Int              @default(0)
+  level              Int              @default(1)
+  chatTokens         Int              @default(20)
+  trustScore         Decimal          @default(50.00) @db.Decimal(5,2)
+  idVerified         Boolean          @default(false)
+
+  // Influencer
+  isInfluencer       Boolean          @default(false)
+  instagramHandle    String?
+  instagramFollowers Int?
+
+  // Subscription
+  subscriptionPlan   SubscriptionPlan @default(free)
+  subscriptionExpiry DateTime?
+
+  // Timestamps
+  createdAt          DateTime         @default(now())
+  updatedAt          DateTime         @updatedAt
+  deletedAt          DateTime?
+
+  // Relations
+  refreshTokens      RefreshToken[]
+  swipesGiven        Swipe[]          @relation("SwiperSwipes")
+  swipesReceived     Swipe[]          @relation("SwipedSwipes")
+  matchesA           Match[]          @relation("MatchUserA")
+  matchesB           Match[]          @relation("MatchUserB")
+  sessionsAsUser     WorkoutSession[] @relation("SessionUser")
+  sessionsAsBuddy    WorkoutSession[] @relation("SessionBuddy")
+  messagesSent       Message[]
+  chatsA             Chat[]           @relation("ChatUserA")
+  chatsB             Chat[]           @relation("ChatUserB")
+  notifications      Notification[]
+  orders             Order[]
+  uploads            Upload[]
+  dailySwipes        DailySwipe[]
+  xpEvents           XpEvent[]
+
+  @@index([email])
+  @@index([city])
+  @@index([latitude, longitude])
+  @@index([subscriptionPlan])
+  @@index([primaryActivity])
+  @@map("users")
+}
+
+// ─────────────────────────────────────────────────────────
+//  AUTH
+// ─────────────────────────────────────────────────────────
+model RefreshToken {
+  id        String   @id @default(uuid())
+  userId    String
+  token     String   @unique @db.Text
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("refresh_tokens")
+}
+
+// ─────────────────────────────────────────────────────────
+//  MATCHING
+// ─────────────────────────────────────────────────────────
+model Swipe {
+  id         String      @id @default(uuid())
+  swiperId   String
+  swipedId   String
+  action     SwipeAction
+  createdAt  DateTime    @default(now())
+
+  swiper     User        @relation("SwiperSwipes", fields: [swiperId], references: [id], onDelete: Cascade)
+  swiped     User        @relation("SwipedSwipes", fields: [swipedId], references: [id], onDelete: Cascade)
+
+  @@unique([swiperId, swipedId])
+  @@index([swiperId])
+  @@index([swipedId])
+  @@map("swipes")
+}
+
+model Match {
+  id        String   @id @default(uuid())
+  userAId   String
+  userBId   String
+  createdAt DateTime @default(now())
+
+  userA     User     @relation("MatchUserA", fields: [userAId], references: [id], onDelete: Cascade)
+  userB     User     @relation("MatchUserB", fields: [userBId], references: [id], onDelete: Cascade)
+  chat      Chat?
+
+  @@unique([userAId, userBId])
+  @@index([userAId])
+  @@index([userBId])
+  @@map("matches")
+}
+
+// ─────────────────────────────────────────────────────────
+//  SESSIONS
+// ─────────────────────────────────────────────────────────
+model WorkoutSession {
+  id               String        @id @default(uuid())
+  userId           String
+  buddyId          String?
+  activity         String
+  gymName          String?
+  scheduledAt      DateTime
+  status           SessionStatus @default(scheduled)
+  proofImageUrl    String?       @db.Text
+  proofVideoUrl    String?       @db.Text
+  proofUploadedAt  DateTime?
+  xpEarned         Int?
+  tokensDeducted   Int?
+  notes            String?       @db.Text
+  createdAt        DateTime      @default(now())
+  updatedAt        DateTime      @updatedAt
+
+  user             User          @relation("SessionUser",  fields: [userId],  references: [id], onDelete: Cascade)
+  buddy            User?         @relation("SessionBuddy", fields: [buddyId], references: [id], onDelete: SetNull)
+
+  @@index([userId])
+  @@index([buddyId])
+  @@index([status])
+  @@index([scheduledAt])
+  @@map("workout_sessions")
+}
+
+// ─────────────────────────────────────────────────────────
+//  CHAT
+// ─────────────────────────────────────────────────────────
+model Chat {
+  id          String    @id @default(uuid())
+  matchId     String    @unique
+  userAId     String
+  userBId     String
+  lastMessage String?   @db.Text
+  lastMessageAt DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  match       Match     @relation(fields: [matchId],  references: [id], onDelete: Cascade)
+  userA       User      @relation("ChatUserA", fields: [userAId], references: [id], onDelete: Cascade)
+  userB       User      @relation("ChatUserB", fields: [userBId], references: [id], onDelete: Cascade)
+  messages    Message[]
+
+  @@index([userAId])
+  @@index([userBId])
+  @@map("chats")
+}
+
+model Message {
+  id         String      @id @default(uuid())
+  chatId     String
+  senderId   String
+  content    String      @db.Text
+  type       MessageType @default(text)
+  isRead     Boolean     @default(false)
+  readAt     DateTime?
+  metadata   Json?
+  createdAt  DateTime    @default(now())
+
+  chat       Chat        @relation(fields: [chatId],   references: [id], onDelete: Cascade)
+  sender     User        @relation(fields: [senderId], references: [id], onDelete: Cascade)
+
+  @@index([chatId])
+  @@index([senderId])
+  @@index([createdAt])
+  @@map("messages")
+}
+
+// ─────────────────────────────────────────────────────────
+//  NOTIFICATIONS
+// ─────────────────────────────────────────────────────────
+model Notification {
+  id        String           @id @default(uuid())
+  userId    String
+  type      NotificationType
+  title     String
+  message   String           @db.Text
+  isRead    Boolean          @default(false)
+  readAt    DateTime?
+  actionUrl String?
+  data      Json?
+  createdAt DateTime         @default(now())
+
+  user      User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([isRead])
+  @@index([createdAt])
+  @@map("notifications")
+}
+
+// ─────────────────────────────────────────────────────────
+//  PAYMENTS / SUBSCRIPTIONS
+// ─────────────────────────────────────────────────────────
+model SubscriptionPlanConfig {
+  id          String   @id @default(uuid())
+  slug        String   @unique
+  name        String
+  description String?  @db.Text
+  price       Int      // INR paise
+  interval    String   // monthly | yearly
+  features    Json     @default("[]")
+  isPopular   Boolean  @default(false)
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  orders      Order[]
+
+  @@map("subscription_plans")
+}
+
+model Order {
+  id                  String   @id @default(uuid())
+  userId              String
+  planId              String?
+  razorpayOrderId     String   @unique
+  razorpayPaymentId   String?
+  razorpaySignature   String?
+  amount              Int      // INR paise
+  currency            String   @default("INR")
+  status              String   @default("created")  // created | paid | failed
+  type                String   @default("subscription") // subscription | tokens
+  tokenPack           Int?
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+
+  user                User                    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  plan                SubscriptionPlanConfig? @relation(fields: [planId],  references: [id])
+
+  @@index([userId])
+  @@index([razorpayOrderId])
+  @@map("orders")
+}
+
+// ─────────────────────────────────────────────────────────
+//  UPLOADS
+// ─────────────────────────────────────────────────────────
+model Upload {
+  id        String       @id @default(uuid())
+  userId    String
+  folder    UploadFolder
+  filename  String
+  url       String       @db.Text
+  mimeType  String?
+  sizeBytes Int?
+  createdAt DateTime     @default(now())
+
+  user      User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("uploads")
+}
+
+// ─────────────────────────────────────────────────────────
+//  GAMIFICATION
+// ─────────────────────────────────────────────────────────
+model DailySwipe {
+  id        String   @id @default(uuid())
+  userId    String
+  date      String   // YYYY-MM-DD
+  count     Int      @default(0)
+
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, date])
+  @@index([userId])
+  @@map("daily_swipes")
+}
+
+model XpEvent {
+  id        String   @id @default(uuid())
+  userId    String
+  action    String
+  xpAmount  Int
+  metadata  Json?
+  createdAt DateTime @default(now())
+
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("xp_events")
+}
+
+// ─────────────────────────────────────────────────────────
+//  ADMIN
+// ─────────────────────────────────────────────────────────
+enum AdminRole { SUPER_ADMIN ADMIN MODERATOR ANALYST SUPPORT }
+
+model AdminUser {
+  id           String    @id @default(uuid())
+  email        String    @unique
+  passwordHash String
+  firstName    String
+  lastName     String
+  role         AdminRole @default(SUPPORT)
+  avatarUrl    String?
+  isActive     Boolean   @default(true)
+  lastLoginAt  DateTime?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  auditLogs    AuditLog[]
+
+  @@map("admin_users")
+}
+
+model AuditLog {
+  id          String    @id @default(uuid())
+  adminId     String
+  action      String    // user.ban, user.unban, plan.update, etc.
+  entityType  String    // user | session | order | plan
+  entityId    String?
+  details     Json?
+  ip          String?
+  createdAt   DateTime  @default(now())
+
+  admin       AdminUser @relation(fields: [adminId], references: [id], onDelete: Cascade)
+
+  @@index([adminId])
+  @@index([action])
+  @@index([createdAt])
+  @@map("audit_logs")
+}

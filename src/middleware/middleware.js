@@ -5,8 +5,8 @@ const logger               = require('../config/logger');
 const rateLimit            = require('express-rate-limit');
 
 // ── Validation ────────────────────────────────────────────
-const validate = (req, res, next) => { 
-  const result = validationResult(req);  
+const validate = (req, res, next) => {
+  const result = validationResult(req);
   if (!result.isEmpty()) {
     const errors = result.array().map(e => ({ field: e.path, message: e.msg }));
     return error(res, 'Validation failed', 422, errors);
