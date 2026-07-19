@@ -13,6 +13,7 @@ const chatCtrl  = require('../controllers/chat.controller');
 const notifCtrl = require('../controllers/notification.controller');
 const subCtrl   = require('../controllers/subscription.controller');
 const upCtrl    = require('../controllers/upload.controller');
+const challengeRouter = require('./challenge.routes');
 
 // ── /users ────────────────────────────────────────────────
 const userRouter = express.Router();
@@ -106,7 +107,10 @@ tokensRouter.post('/buy', authenticate, [
 const uploadRouter = express.Router();
 uploadRouter.post('/', authenticate, upload.single('file'), upCtrl.uploadFile);
 
+const challengeLeaderboardCtrl = require('../controllers/challenge.controller');
+
 module.exports = {
   userRouter, matchRouter, sessionRouter, chatRouter,
   notifRouter, subRouter, tokensRouter, uploadRouter,
+  challengeRouter,
 };

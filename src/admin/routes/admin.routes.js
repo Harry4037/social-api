@@ -63,4 +63,22 @@ router.get   ('/admins',       requireRole('SUPER_ADMIN'), usersCtrl.listAdmins)
 router.post  ('/admins',       requireRole('SUPER_ADMIN'), [body('email').isEmail(), body('password').isLength({ min: 8 }), body('firstName').notEmpty(), body('lastName').notEmpty()], validate, audit('admin.create','admin'), usersCtrl.createAdmin);
 router.patch ('/admins/:id',   requireRole('SUPER_ADMIN'), [param('id').isUUID()], validate, audit('admin.update','admin'), usersCtrl.updateAdmin);
 
+
+// ── V2 Challenge management ────────────────────────────────
+const challengeAdminCtrl = require('../controllers/adminChallenge.controller');
+
+router.get   ('/challenges',              requireRole('ADMIN'), challengeAdminCtrl.list);
+router.post  ('/challenges',              requireRole('ADMIN'), [
+  body('title').notEmpty().trim(),
+  body('type').isIn(['solo','duel','pack']),
+  body('tier').isInt({ min:1, max:4 }),
+  body('startAt').isISO8601(),
+  body('endAt').isISO8601(),
+  body('xpPool').isInt({ min:1 }),
+  body('stations').isArray({ min:1 }),
+], validate, challengeAdminCtrl.create);
+router.patch ('/challenges/:id',          requireRole('ADMIN'), [param('id').isUUID()], validate, challengeAdminCtrl.update);
+router.delete('/challenges/:id',          requireRole('ADMIN'), [param('id').isUUID()], validate, challengeAdminCtrl.remove);
+router.get   ('/challenges/:id/entries',  requireRole('ADMIN'), [param('id').isUUID()], validate, challengeAdminCtrl.getEntries);
+
 module.exports = router;
