@@ -1,0 +1,29 @@
+{"level":"info","message":"Socket.io initialised","timestamp":"2026-07-20 18:29:23"}
+{"level":"info","message":"✅  Database connected","timestamp":"2026-07-20 18:29:26"}
+{"level":"info","message":"Background jobs started","timestamp":"2026-07-20 18:29:26"}
+{"level":"info","message":"🚀  FitConnect API running on port 5000","timestamp":"2026-07-20 18:29:26"}
+{"level":"info","message":"    /api/v1/auth  |  /api/v1/match  |  /api/v1/sessions  etc.","timestamp":"2026-07-20 18:29:26"}
+{"level":"info","message":"SIGINT received — shutting down","timestamp":"2026-07-20 18:30:24"}
+{"level":"info","message":"Socket.io initialised","timestamp":"2026-07-20 18:30:33"}
+{"level":"info","message":"✅  Database connected","timestamp":"2026-07-20 18:30:33"}
+{"level":"info","message":"Background jobs started","timestamp":"2026-07-20 18:30:33"}
+{"level":"info","message":"🚀  FitConnect API running on port 5000","timestamp":"2026-07-20 18:30:33"}
+{"level":"info","message":"    /api/v1/auth  |  /api/v1/match  |  /api/v1/sessions  etc.","timestamp":"2026-07-20 18:30:33"}
+{"level":"info","message":"\u001b[0mGET /api/v1/admin/dashboard/stats \u001b[33m401\u001b[0m 26.349 ms - 43\u001b[0m","timestamp":"2026-07-20 18:33:42"}
+{"level":"info","message":"\u001b[0mGET /api/v1/admin/dashboard/recent-activity \u001b[33m401\u001b[0m 10.250 ms - 43\u001b[0m","timestamp":"2026-07-20 18:33:42"}
+{"level":"info","message":"\u001b[0mPOST /api/v1/admin/auth/login \u001b[32m200\u001b[0m 1650.950 ms - 453\u001b[0m","timestamp":"2026-07-20 18:33:51"}
+{"level":"info","message":"\u001b[0mGET /api/v1/admin/dashboard/recent-activity \u001b[32m200\u001b[0m 1839.833 ms - 690\u001b[0m","timestamp":"2026-07-20 18:33:53"}
+{"level":"info","message":"\u001b[0mGET /api/v1/admin/dashboard/stats \u001b[32m200\u001b[0m 2403.935 ms - 870\u001b[0m","timestamp":"2026-07-20 18:33:53"}
+{"level":"info","message":"\u001b[0mGET /admin/challenges?page=1&limit=10 \u001b[33m404\u001b[0m 2.437 ms - 45\u001b[0m","timestamp":"2026-07-20 19:03:05"}
+{"level":"info","message":"\u001b[0mGET /admin/challenges?page=1&limit=10 \u001b[33m404\u001b[0m 5.082 ms - 45\u001b[0m","timestamp":"2026-07-20 19:03:11"}
+{"level":"info","message":"\u001b[0mGET /admin/challenges?page=1&limit=10 \u001b[33m404\u001b[0m 0.586 ms - 45\u001b[0m","timestamp":"2026-07-20 19:03:11"}
+{"level":"info","message":"\u001b[0mGET /admin/challenges?page=1&limit=10 \u001b[33m404\u001b[0m 0.842 ms - 45\u001b[0m","timestamp":"2026-07-20 19:03:25"}
+{"level":"info","message":"\u001b[0mGET /api/admin/challenges?page=1&limit=10 \u001b[33m404\u001b[0m 1.210 ms - 45\u001b[0m","timestamp":"2026-07-20 19:04:37"}
+{"level":"info","message":"\u001b[0mGET /api/admin/challenges?page=1&limit=10 \u001b[33m404\u001b[0m 3.966 ms - 45\u001b[0m","timestamp":"2026-07-20 19:04:41"}
+{"level":"info","message":"\u001b[0mGET /api/admin/challenges?page=1&limit=10 \u001b[33m404\u001b[0m 5.949 ms - 45\u001b[0m","timestamp":"2026-07-20 19:04:41"}
+{"level":"info","message":"\u001b[0mGET /api/v1/admin/users?page=1&limit=20 \u001b[32m200\u001b[0m 661.522 ms - -\u001b[0m","timestamp":"2026-07-20 19:04:58"}
+{"level":"info","message":"\u001b[0mGET /api/v1/admin/challenges?page=1&limit=10 \u001b[32m200\u001b[0m 3012.546 ms - -\u001b[0m","timestamp":"2026-07-20 19:05:10"}
+{"level":"info","message":"\u001b[0mGET /api/v1/admin/challenges?page=1&limit=10 \u001b[36m304\u001b[0m 537.726 ms - -\u001b[0m","timestamp":"2026-07-20 19:05:11"}
+{"level":"info","message":"\u001b[0mGET /api/v1/admin/challenges?page=1&limit=10 \u001b[36m304\u001b[0m 332.253 ms - -\u001b[0m","timestamp":"2026-07-20 19:05:13"}
+{"level":"info","message":"\u001b[0mGET /api/v1/admin/challenges?page=1&limit=10 \u001b[36m304\u001b[0m 326.874 ms - -\u001b[0m","timestamp":"2026-07-20 19:05:13"}
+{"level":"info","message":"SIGINT received — shutting down","timestamp":"2026-07-20 19:13:13"}
