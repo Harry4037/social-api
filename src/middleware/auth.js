@@ -5,7 +5,7 @@ const prisma           = require('../config/db');
 
 const authenticate = async (req, res, next) => {
   try {
-    const header = req.headers.authorization || '';
+    const header = req.headers.authorization || '';    
     if (!header.startsWith('Bearer ')) {
       return error(res, 'No token provided', 401);
     }
