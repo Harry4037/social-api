@@ -1,6 +1,0 @@
-{"level":"info","message":"Socket.io initialised","timestamp":"2026-07-19 20:34:17"}
-{"level":"info","message":"✅  Database connected","timestamp":"2026-07-19 20:34:19"}
-{"level":"info","message":"Background jobs started","timestamp":"2026-07-19 20:34:19"}
-{"level":"info","message":"🚀  FitConnect API running on port 5000","timestamp":"2026-07-19 20:34:19"}
-{"level":"info","message":"    /api/v1/auth  |  /api/v1/match  |  /api/v1/sessions  etc.","timestamp":"2026-07-19 20:34:19"}
-{"level":"info","message":"SIGINT received — shutting down","timestamp":"2026-07-19 20:34:28"}
