@@ -1,12 +1,12 @@
 'use strict';
 const router = require('express').Router();
 const { body, param } = require('express-validator');
-const { validate }    = require('../../middleware/middleware');
+const { validate } = require('../../middleware/middleware');
 const { adminAuth, requireRole, audit } = require('../middleware/adminAuth');
 
-const authCtrl    = require('../controllers/adminAuth.controller');
-const dashCtrl    = require('../controllers/dashboard.controller');
-const usersCtrl   = require('../controllers/adminUsers.controller');
+const authCtrl = require('../controllers/adminAuth.controller');
+const dashCtrl = require('../controllers/dashboard.controller');
+const usersCtrl = require('../controllers/adminUsers.controller');
 const contentCtrl = require('../controllers/adminContent.controller');
 
 // ── Public ────────────────────────────────────────────────
@@ -19,66 +19,66 @@ router.post('/auth/login', [
 router.use(adminAuth);
 
 // Auth
-router.get ('/auth/me',              authCtrl.me);
+router.get('/auth/me', authCtrl.me);
 router.post('/auth/change-password', authCtrl.changePassword);
 
 // Dashboard
-router.get('/dashboard/stats',           dashCtrl.getStats);
+router.get('/dashboard/stats', dashCtrl.getStats);
 router.get('/dashboard/recent-activity', dashCtrl.getRecentActivity);
 
 // ── Users (ADMIN+) ────────────────────────────────────────
-router.get   ('/users',              requireRole('SUPPORT'), usersCtrl.listUsers);
-router.get   ('/users/:id',          requireRole('SUPPORT'), [param('id').isUUID()], validate, usersCtrl.getUser);
-router.patch ('/users/:id',          requireRole('ADMIN'),   [param('id').isUUID()], validate, audit('user.update','user'), usersCtrl.updateUser);
-router.post  ('/users/:id/ban',      requireRole('MODERATOR'), [param('id').isUUID()], validate, audit('user.ban','user'),   usersCtrl.banUser);
-router.post  ('/users/:id/unban',    requireRole('MODERATOR'), [param('id').isUUID()], validate, audit('user.unban','user'), usersCtrl.unbanUser);
-router.delete('/users/:id',          requireRole('ADMIN'),   [param('id').isUUID()], validate, audit('user.delete','user'), usersCtrl.deleteUser);
-router.post  ('/users/:id/grant-tokens', requireRole('ADMIN'), [param('id').isUUID(), body('amount').optional().isInt({ min: 1, max: 1000 })], validate, audit('user.grantTokens','user'), usersCtrl.grantTokens);
+router.get('/users', requireRole('SUPPORT'), usersCtrl.listUsers);
+router.get('/users/:id', requireRole('SUPPORT'), [param('id').isUUID()], validate, usersCtrl.getUser);
+router.patch('/users/:id', requireRole('ADMIN'), [param('id').isUUID()], validate, audit('user.update', 'user'), usersCtrl.updateUser);
+router.post('/users/:id/ban', requireRole('MODERATOR'), [param('id').isUUID()], validate, audit('user.ban', 'user'), usersCtrl.banUser);
+router.post('/users/:id/unban', requireRole('MODERATOR'), [param('id').isUUID()], validate, audit('user.unban', 'user'), usersCtrl.unbanUser);
+router.delete('/users/:id', requireRole('ADMIN'), [param('id').isUUID()], validate, audit('user.delete', 'user'), usersCtrl.deleteUser);
+router.post('/users/:id/grant-tokens', requireRole('ADMIN'), [param('id').isUUID(), body('amount').optional().isInt({ min: 1, max: 1000 })], validate, audit('user.grantTokens', 'user'), usersCtrl.grantTokens);
 
 // ── Sessions ──────────────────────────────────────────────
-router.get  ('/sessions',     requireRole('SUPPORT'), contentCtrl.listSessions);
-router.patch('/sessions/:id', requireRole('MODERATOR'), [param('id').isUUID()], validate, audit('session.update','session'), contentCtrl.updateSession);
+router.get('/sessions', requireRole('SUPPORT'), contentCtrl.listSessions);
+router.patch('/sessions/:id', requireRole('MODERATOR'), [param('id').isUUID()], validate, audit('session.update', 'session'), contentCtrl.updateSession);
 
 // ── Matches ───────────────────────────────────────────────
-router.get   ('/matches',     requireRole('SUPPORT'),    contentCtrl.listMatches);
-router.delete('/matches/:id', requireRole('MODERATOR'),  [param('id').isUUID()], validate, audit('match.delete','match'), contentCtrl.deleteMatch);
+router.get('/matches', requireRole('SUPPORT'), contentCtrl.listMatches);
+router.delete('/matches/:id', requireRole('MODERATOR'), [param('id').isUUID()], validate, audit('match.delete', 'match'), contentCtrl.deleteMatch);
 
 // ── Orders / Revenue ──────────────────────────────────────
-router.get('/orders',         requireRole('ANALYST'),    contentCtrl.listOrders);
+router.get('/orders', requireRole('ANALYST'), contentCtrl.listOrders);
 
 // ── Subscription Plans ────────────────────────────────────
-router.get  ('/plans',        requireRole('ANALYST'),    contentCtrl.listPlans);
-router.patch('/plans/:id',    requireRole('ADMIN'),      [param('id').isUUID()], validate, audit('plan.update','plan'), contentCtrl.updatePlan);
+router.get('/plans', requireRole('ANALYST'), contentCtrl.listPlans);
+router.patch('/plans/:id', requireRole('ADMIN'), [param('id').isUUID()], validate, audit('plan.update', 'plan'), contentCtrl.updatePlan);
 
 // ── Notifications ─────────────────────────────────────────
 router.post('/notifications/broadcast', requireRole('ADMIN'),
   [body('title').notEmpty(), body('message').notEmpty()], validate,
-  audit('notification.broadcast','notification'), contentCtrl.broadcastNotification);
+  audit('notification.broadcast', 'notification'), contentCtrl.broadcastNotification);
 
 // ── Audit Logs ────────────────────────────────────────────
-router.get('/audit-logs',     requireRole('ADMIN'),      contentCtrl.listAuditLogs);
+router.get('/audit-logs', requireRole('ADMIN'), contentCtrl.listAuditLogs);
 
 // ── Admin accounts (SUPER_ADMIN only) ─────────────────────
-router.get   ('/admins',       requireRole('SUPER_ADMIN'), usersCtrl.listAdmins);
-router.post  ('/admins',       requireRole('SUPER_ADMIN'), [body('email').isEmail(), body('password').isLength({ min: 8 }), body('firstName').notEmpty(), body('lastName').notEmpty()], validate, audit('admin.create','admin'), usersCtrl.createAdmin);
-router.patch ('/admins/:id',   requireRole('SUPER_ADMIN'), [param('id').isUUID()], validate, audit('admin.update','admin'), usersCtrl.updateAdmin);
+router.get('/admins', requireRole('SUPER_ADMIN'), usersCtrl.listAdmins);
+router.post('/admins', requireRole('SUPER_ADMIN'), [body('email').isEmail(), body('password').isLength({ min: 8 }), body('firstName').notEmpty(), body('lastName').notEmpty()], validate, audit('admin.create', 'admin'), usersCtrl.createAdmin);
+router.patch('/admins/:id', requireRole('SUPER_ADMIN'), [param('id').isUUID()], validate, audit('admin.update', 'admin'), usersCtrl.updateAdmin);
 
 
 // ── V2 Challenge management ────────────────────────────────
 const challengeAdminCtrl = require('../controllers/adminChallenge.controller');
 
-router.get   ('/challenges',              requireRole('ADMIN'), challengeAdminCtrl.list);
-router.post  ('/challenges',              requireRole('ADMIN'), [
+router.get('/challenges', requireRole('ADMIN'), challengeAdminCtrl.list);
+router.post('/challenges', requireRole('ADMIN'), [
   body('title').notEmpty().trim(),
-  body('type').isIn(['solo','duel','pack']),
-  body('tier').isInt({ min:1, max:4 }),
+  body('type').isIn(['solo', 'duel', 'pack']),
+  body('tier').isInt({ min: 1, max: 4 }),
   body('startAt').isISO8601(),
   body('endAt').isISO8601(),
-  body('xpPool').isInt({ min:1 }),
-  body('stations').isArray({ min:1 }),
+  body('xpPool').isInt({ min: 1 }),
+  body('stations').isArray({ min: 1 }),
 ], validate, challengeAdminCtrl.create);
-router.patch ('/challenges/:id',          requireRole('ADMIN'), [param('id').isUUID()], validate, challengeAdminCtrl.update);
-router.delete('/challenges/:id',          requireRole('ADMIN'), [param('id').isUUID()], validate, challengeAdminCtrl.remove);
-router.get   ('/challenges/:id/entries',  requireRole('ADMIN'), [param('id').isUUID()], validate, challengeAdminCtrl.getEntries);
+router.patch('/challenges/:id', requireRole('ADMIN'), validate, challengeAdminCtrl.update);
+router.delete('/challenges/:id', requireRole('ADMIN'), validate, challengeAdminCtrl.remove);
+router.get('/challenges/:id/entries', requireRole('ADMIN'), validate, challengeAdminCtrl.getEntries);
 
 module.exports = router;

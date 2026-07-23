@@ -12,10 +12,10 @@ const r = express.Router();
 
 r.get ('/',          authenticate, ctrl.getChallenges);
 r.get ('/my',        authenticate, ctrl.getMyChallenges);
-r.get ('/:id',       authenticate, [param('id').isUUID()], validate, ctrl.getChallenge);
-r.get ('/:id/feed',  authenticate, [param('id').isUUID()], validate, ctrl.getChallengeFeed);
+r.get ('/:id',       authenticate, validate, ctrl.getChallenge);
+r.get ('/:id/feed',  authenticate, validate, ctrl.getChallengeFeed);
 r.post('/:id/join',  authenticate, [
-  param('id').isUUID(),
+  // param('id').isUUID(),
   body('buddyId').optional().isUUID(),
 ], validate, ctrl.joinChallenge);
 
