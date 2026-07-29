@@ -50,6 +50,7 @@ exports.create = async (req, res) => {
   try {
     const {
       title, description, type, tier, cityId,
+      environment = 'any', activityTag = '⭐ Any activity',
       startAt, endAt, xpPool,
       entryLevelRequired = 1, trustRequired = 0,
       maxParticipants,
@@ -59,6 +60,7 @@ exports.create = async (req, res) => {
     const challenge = await prisma.challenge.create({
       data: {
         title, description, type, tier: Number(tier),
+        environment, activityTag,
         cityId: cityId || null,
         startAt: new Date(startAt),
         endAt:   new Date(endAt),
@@ -69,13 +71,16 @@ exports.create = async (req, res) => {
         isActive: true,
         stations: {
           create: stations.map((s, i) => ({
-            stationNum:   i + 1,
-            title:        s.title,
-            description:  s.description,
-            verifyType:   s.verifyType  || 'count',
-            targetValue:  Number(s.targetValue) || 1,
-            buddyRequired: s.buddyRequired === true,
-            xpReward:     Number(s.xpReward) || 0,
+            stationNum:      i + 1,
+            title:           s.title,
+            exerciseName:    s.exerciseName    || '',
+            setsReps:        s.setsReps        || '',
+            description:     s.description,
+            proofInstruction:s.proofInstruction|| 'Upload a photo or video of your workout',
+            verifyType:      s.verifyType      || 'count',
+            targetValue:     Number(s.targetValue) || 1,
+            buddyRequired:   s.buddyRequired   === true,
+            xpReward:        Number(s.xpReward)    || 0,
           })),
         },
       },
