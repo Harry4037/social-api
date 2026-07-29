@@ -19,11 +19,12 @@ const prisma = new PrismaClient();
 // ── GET /challenges?tier=&type=&city= ─────────────────────
 exports.getChallenges = async (req, res) => {
   try {
-    const { tier, type, city } = req.query;
+    const { tier, type, city, environment } = req.query;
     const where = { isActive: true };
-    if (tier)  where.tier   = Number(tier);
-    if (type)  where.type   = type;
-    if (city)  where.cityId = city;
+    if (tier)        where.tier        = Number(tier);
+    if (type)        where.type        = type;
+    if (city)        where.cityId      = city;
+    if (environment) where.environment = environment;
 
     const challenges = await prisma.challenge.findMany({
       where,

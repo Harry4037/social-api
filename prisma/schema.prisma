@@ -389,8 +389,9 @@ model Challenge {
   description         String
   type                String   // solo | duel | pack
   tier                Int      @default(1)
-  activityType        String   @default("any")  // gym | outdoor | running | cycling | swimming | boxing | yoga | any
-  activityTag         String   @default("Any activity")  // short display label e.g. "🏋️ Gym" "🏃 Running"
+  activityType        String   @default("any")
+  activityTag         String   @default("Any activity")
+  environment         String   @default("any")  // gym | outdoor | no_gym | any
   cityId              String?
   startAt             DateTime
   endAt               DateTime
