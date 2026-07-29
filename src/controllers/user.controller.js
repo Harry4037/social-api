@@ -8,9 +8,9 @@ const updateProfile = async (req, res, next) => {
   try {
     const {
       firstName, lastName, username, bio, city, country,
-      primaryActivity, activities, experienceLevel, goals,
+      gender, primaryActivity, activities, experienceLevel, goals,
       primaryGym, latitude, longitude, instagramHandle, phone,
-      avatarUrl,
+      avatarUrl, walkthroughSeen,
     } = req.body;
 
     // Ensure username uniqueness when provided
@@ -32,7 +32,9 @@ const updateProfile = async (req, res, next) => {
         ...(country         !== undefined && { country }),
         ...(phone           !== undefined && { phone }),
         ...(avatarUrl       !== undefined && { avatarUrl }),
-        ...(primaryActivity !== undefined && { primaryActivity }),
+        ...(gender           !== undefined && { gender }),
+        ...(walkthroughSeen  !== undefined && { walkthroughSeen }),
+        ...(primaryActivity  !== undefined && { primaryActivity }),
         ...(activities      !== undefined && { activities: JSON.stringify(activities) }),
         ...(experienceLevel !== undefined && { experienceLevel }),
         ...(goals           !== undefined && { goals: JSON.stringify(goals) }),

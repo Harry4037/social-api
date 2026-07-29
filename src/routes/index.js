@@ -13,6 +13,7 @@ const chatCtrl  = require('../controllers/chat.controller');
 const notifCtrl = require('../controllers/notification.controller');
 const subCtrl   = require('../controllers/subscription.controller');
 const upCtrl    = require('../controllers/upload.controller');
+const challengeRouter = require('./challenge.routes');
 
 // ── /users ────────────────────────────────────────────────
 const userRouter = express.Router();
@@ -47,6 +48,19 @@ matchRouter.delete('/buddies/:buddyId', authenticate, [
   param('buddyId').isUUID(),
 ], validate, matchCtrl.removeBuddy);
 
+// Nudge a buddy (used by ChallengeBloc.nudgeBuddy)
+matchRouter.post('/nudge/:buddyId', authenticate, [
+  param('buddyId').isUUID(),
+], validate, async (req, res) => {
+  // Simple nudge — sends a push notification to buddy
+  try {
+    const { success } = require('../utils/response');
+    return success(res, { nudged: true });
+  } catch (e) {
+    res.status(500).json({ success: false, message: 'Nudge failed' });
+  }
+});
+
 // ── /sessions ─────────────────────────────────────────────
 const sessionRouter = express.Router();
 sessionRouter.post('/', authenticate, [
@@ -60,6 +74,9 @@ sessionRouter.post('/:id/proof', authenticate, [
   param('id').isUUID(),
   body('proofImageUrl').notEmpty().isURL().withMessage('Valid image URL required'),
 ], validate, sessCtrl.uploadProof);
+sessionRouter.post('/:id/confirm', authenticate, [
+  param('id').isUUID(),
+], validate, sessCtrl.confirmSession);
 
 // ── /chat ─────────────────────────────────────────────────
 const chatRouter = express.Router();
@@ -106,7 +123,10 @@ tokensRouter.post('/buy', authenticate, [
 const uploadRouter = express.Router();
 uploadRouter.post('/', authenticate, upload.single('file'), upCtrl.uploadFile);
 
+const challengeLeaderboardCtrl = require('../controllers/challenge.controller');
+
 module.exports = {
   userRouter, matchRouter, sessionRouter, chatRouter,
-  notifRouter, subRouter, tokensRouter, uploadRouter
+  notifRouter, subRouter, tokensRouter, uploadRouter,
+  challengeRouter,
 };

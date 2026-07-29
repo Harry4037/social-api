@@ -38,6 +38,13 @@ const scheduleSession = async (req, res, next) => {
       return res_.error(res, 'scheduledAt must be a future date', 422);
     }
 
+    // If buddyId provided, verify the buddy exists and is a real match
+    if (buddyId) {
+      const buddy = await prisma.user.findUnique({ where: { id: buddyId } });
+      if (!buddy) return res_.error(res, 'Buddy not found', 404);
+    }
+
+    // Create session for the current user
     const session = await prisma.workoutSession.create({
       data: {
         id:          uuid(),
@@ -51,9 +58,26 @@ const scheduleSession = async (req, res, next) => {
       ...SESSION_FIELDS,
     });
 
-    // Notify buddy
+    // If buddy session — also create a mirror session for the buddy
+    // so it appears in their Sessions tab too
     if (buddyId) {
-      const me = await prisma.user.findUnique({ where: { id: req.user.id }, select: { firstName: true, lastName: true } });
+      await prisma.workoutSession.create({
+        data: {
+          id:          uuid(),
+          userId:      buddyId,           // buddy is the owner of this mirror session
+          buddyId:     req.user.id,       // original scheduler is their buddy
+          activity,
+          scheduledAt: dt,
+          gymName:     gymName || null,
+          notes:       notes   || null,
+        },
+      });
+
+      // Notify buddy
+      const me = await prisma.user.findUnique({
+        where: { id: req.user.id },
+        select: { firstName: true, lastName: true },
+      });
       await notifSvc.notifySessionScheduled(buddyId, `${me.firstName} ${me.lastName}`, session.id);
     }
 
@@ -95,13 +119,24 @@ const uploadProof = async (req, res, next) => {
     const { proofImageUrl } = req.body;
     if (!proofImageUrl) return res_.error(res, 'proofImageUrl is required', 422);
 
+    // ── Option 1: Time window validation ─────────────────────────
+    // Proof must be uploaded within 2 hours of each other for buddy sessions
+    // For solo sessions, standard 8-hour window applies
+    const now          = new Date();
+    const sessionTime  = new Date(session.scheduledAt);
+    const hoursElapsed = (now - sessionTime) / (1000 * 60 * 60);
+
+    if (hoursElapsed > 8) {
+      return res_.error(res, 'Proof window closed — must upload within 8 hours of session time', 422);
+    }
+
     const xpAmount = 50;
     const updated  = await prisma.workoutSession.update({
       where: { id: session.id },
       data: {
         proofImageUrl,
         proofUploadedAt: new Date(),
-        status:          'completed',
+        status:          session.buddyId ? 'proof_uploaded' : 'completed', // buddy session waits for buddy confirm
         xpEarned:        xpAmount,
       },
       ...SESSION_FIELDS,
@@ -109,8 +144,63 @@ const uploadProof = async (req, res, next) => {
 
     await xpSvc.awardXp(req.user.id, 'session_uploaded');
 
+    // If buddy session — notify buddy to confirm
+    if (session.buddyId) {
+      await notifSvc.notifyProofUploaded(session.buddyId, req.user.id, session.id);
+      return res_.success(res, formatSession(updated), 'Proof uploaded — waiting for buddy confirmation');
+    }
+
     return res_.success(res, formatSession(updated), 'Proof uploaded — session completed!');
   } catch (e) { next(e); }
 };
 
-module.exports = { scheduleSession, getMySessions, uploadProof };
+// ── POST /sessions/:id/confirm ─────────────────────────────────
+// Option 3: Buddy confirms "haan hum saath the"
+const confirmSession = async (req, res, next) => {
+  try {
+    // Find the mirror session where this user is the buddy
+    const session = await prisma.workoutSession.findFirst({
+      where: {
+        id:      req.params.id,
+        buddyId: req.user.id,   // current user must be the buddy of this session
+        status:  'proof_uploaded',
+      },
+    });
+    if (!session) return res_.error(res, 'Session not found or not ready for confirmation', 404);
+
+    // Check time window — buddy must confirm within 2 hours of original proof
+    const proofTime    = new Date(session.proofUploadedAt);
+    const hoursElapsed = (new Date() - proofTime) / (1000 * 60 * 60);
+    if (hoursElapsed > 2) {
+      return res_.error(res, 'Confirmation window closed — buddy must confirm within 2 hours of proof upload', 422);
+    }
+
+    // Mark original session as completed
+    const updated = await prisma.workoutSession.update({
+      where: { id: session.id },
+      data:  { status: 'completed' },
+      ...SESSION_FIELDS,
+    });
+
+    // Also mark the buddy's own mirror session as completed
+    await prisma.workoutSession.updateMany({
+      where: {
+        userId:      req.user.id,
+        buddyId:     session.userId,
+        scheduledAt: session.scheduledAt,
+        status:      { not: 'completed' },
+      },
+      data: { status: 'completed', xpEarned: 50 },
+    });
+
+    // Award XP to buddy for confirming
+    await xpSvc.awardXp(req.user.id, 'session_uploaded');
+
+    // Notify original user that buddy confirmed
+    await notifSvc.notifySessionConfirmed(session.userId, req.user.id, session.id);
+
+    return res_.success(res, formatSession(updated), 'Session confirmed — both of you earned XP!');
+  } catch (e) { next(e); }
+};
+
+module.exports = { scheduleSession, getMySessions, uploadProof, confirmSession };

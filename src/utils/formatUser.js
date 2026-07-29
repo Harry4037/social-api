@@ -26,6 +26,9 @@ const formatUser = (u) => ({
   loginCount:        u.loginCount,
   lastLoginAt:       u.lastLoginAt,
   createdAt:         u.createdAt,
+  // Profile
+  gender:            u.gender,
+  walkthroughSeen:   u.walkthroughSeen ?? false,
   // Fitness
   primaryActivity:   u.primaryActivity,
   activities:        parseJson(u.activities),
