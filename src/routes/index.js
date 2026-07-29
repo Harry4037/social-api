@@ -125,8 +125,12 @@ uploadRouter.post('/', authenticate, upload.single('file'), upCtrl.uploadFile);
 
 const challengeLeaderboardCtrl = require('../controllers/challenge.controller');
 
+// ── /global-leaderboard ───────────────────────────────────
+const globalLeaderboardRouter = express.Router();
+globalLeaderboardRouter.get('/', authenticate, challengeLeaderboardCtrl.getGlobalLeaderboard);
+
 module.exports = {
   userRouter, matchRouter, sessionRouter, chatRouter,
   notifRouter, subRouter, tokensRouter, uploadRouter,
-  challengeRouter,
+  challengeRouter, globalLeaderboardRouter,
 };

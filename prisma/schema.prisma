@@ -408,15 +408,18 @@ model Challenge {
 }
 
 model ChallengeStation {
-  id            String  @id @default(uuid())
-  challengeId   String
-  stationNum    Int
-  title         String
-  description   String
-  verifyType    String  @default("count")
-  targetValue   Int     @default(1)
-  buddyRequired Boolean @default(false)
-  xpReward      Int
+  id               String  @id @default(uuid())
+  challengeId      String
+  stationNum       Int
+  title            String
+  description      String
+  exerciseName     String  @default("")        // e.g. "Push-ups"
+  setsReps         String  @default("")        // e.g. "3 sets × 20 reps"
+  proofInstruction String  @default("Upload a photo or video of your workout") // exact proof guidance
+  verifyType       String  @default("count")
+  targetValue      Int     @default(1)
+  buddyRequired    Boolean @default(false)
+  xpReward         Int
 
   challenge    Challenge           @relation(fields: [challengeId], references: [id])
   completions  StationCompletion[]
