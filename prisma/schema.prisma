@@ -11,13 +11,66 @@ datasource db {
 // ─────────────────────────────────────────────────────────
 //  ENUMS
 // ─────────────────────────────────────────────────────────
-enum UserStatus        { ACTIVE INACTIVE BANNED SUSPENDED }
-enum SubscriptionPlan  { free pro elite }
-enum SessionStatus     { scheduled completed missed cancelled }
-enum MessageType       { text image session_invite proof system }
-enum NotificationType  { match session proof chat token xp payment subscription system }
-enum SwipeAction       { like skip super_like }
-enum UploadFolder      { avatars proofs covers }
+enum UserStatus {
+  ACTIVE
+  INACTIVE
+  BANNED
+  SUSPENDED
+}
+
+enum SubscriptionPlan {
+  free
+  pro
+  elite
+}
+
+enum SessionStatus {
+  scheduled
+  completed
+  missed
+  cancelled
+  proof_uploaded
+}
+
+enum MessageType {
+  text
+  image
+  session_invite
+  proof
+  system
+}
+
+enum NotificationType {
+  match
+  session
+  proof
+  chat
+  token
+  xp
+  payment
+  subscription
+  system
+}
+
+enum SwipeAction {
+  like
+  skip
+  super_like
+}
+
+enum UploadFolder {
+  avatars
+  proofs
+  covers
+}
+
+enum AdminRole {
+  SUPER_ADMIN
+  ADMIN
+  MODERATOR
+  ANALYST
+  SUPPORT
+}
 
 // ─────────────────────────────────────────────────────────
 //  USER
@@ -47,7 +100,7 @@ model User {
 
   // Fitness profile
   gender             String?
-  walkthroughSeen    Boolean  @default(false)
+  walkthroughSeen    Boolean          @default(false)
   primaryActivity    String?
   activities         Json             @default("[]")
   experienceLevel    String?
@@ -76,21 +129,24 @@ model User {
   deletedAt          DateTime?
 
   // Relations
-  refreshTokens      RefreshToken[]
-  swipesGiven        Swipe[]          @relation("SwiperSwipes")
-  swipesReceived     Swipe[]          @relation("SwipedSwipes")
-  matchesA           Match[]          @relation("MatchUserA")
-  matchesB           Match[]          @relation("MatchUserB")
-  sessionsAsUser     WorkoutSession[] @relation("SessionUser")
-  sessionsAsBuddy    WorkoutSession[] @relation("SessionBuddy")
-  messagesSent       Message[]
-  chatsA             Chat[]           @relation("ChatUserA")
-  chatsB             Chat[]           @relation("ChatUserB")
-  notifications      Notification[]
-  orders             Order[]
-  uploads            Upload[]
-  dailySwipes        DailySwipe[]
-  xpEvents           XpEvent[]
+  refreshTokens        RefreshToken[]
+  swipesGiven          Swipe[]            @relation("SwiperSwipes")
+  swipesReceived       Swipe[]            @relation("SwipedSwipes")
+  matchesA             Match[]            @relation("MatchUserA")
+  matchesB             Match[]            @relation("MatchUserB")
+  sessionsAsUser       WorkoutSession[]   @relation("SessionUser")
+  sessionsAsBuddy      WorkoutSession[]   @relation("SessionBuddy")
+  messagesSent         Message[]
+  chatsA               Chat[]             @relation("ChatUserA")
+  chatsB               Chat[]             @relation("ChatUserB")
+  notifications        Notification[]
+  orders               Order[]
+  uploads              Upload[]
+  dailySwipes          DailySwipe[]
+  xpEvents             XpEvent[]
+  challengeEntries     ChallengeEntry[]   @relation("UserChallenges")
+  buddyChallenges      ChallengeEntry[]   @relation("BuddyChallenges")
+  challengeFeedPosts   ChallengeFeedPost[] @relation("UserFeedPosts")
 
   @@index([email])
   @@index([city])
@@ -106,7 +162,8 @@ model User {
 model RefreshToken {
   id        String   @id @default(uuid())
   userId    String
-  token     String   @unique @db.Text
+  // FIX: Text cannot be unique in MySQL — use VARCHAR(500)
+  token     String   @unique @db.VarChar(500)
   expiresAt DateTime
   createdAt DateTime @default(now())
 
@@ -185,19 +242,19 @@ model WorkoutSession {
 //  CHAT
 // ─────────────────────────────────────────────────────────
 model Chat {
-  id          String    @id @default(uuid())
-  matchId     String    @unique
-  userAId     String
-  userBId     String
-  lastMessage String?   @db.Text
+  id            String    @id @default(uuid())
+  matchId       String    @unique
+  userAId       String
+  userBId       String
+  lastMessage   String?   @db.Text
   lastMessageAt DateTime?
-  createdAt   DateTime  @default(now())
-  updatedAt   DateTime  @updatedAt
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
 
-  match       Match     @relation(fields: [matchId],  references: [id], onDelete: Cascade)
-  userA       User      @relation("ChatUserA", fields: [userAId], references: [id], onDelete: Cascade)
-  userB       User      @relation("ChatUserB", fields: [userBId], references: [id], onDelete: Cascade)
-  messages    Message[]
+  match         Match     @relation(fields: [matchId],  references: [id], onDelete: Cascade)
+  userA         User      @relation("ChatUserA", fields: [userAId], references: [id], onDelete: Cascade)
+  userB         User      @relation("ChatUserB", fields: [userBId], references: [id], onDelete: Cascade)
+  messages      Message[]
 
   @@index([userAId])
   @@index([userBId])
@@ -255,8 +312,8 @@ model SubscriptionPlanConfig {
   slug        String   @unique
   name        String
   description String?  @db.Text
-  price       Int      // INR paise
-  interval    String   // monthly | yearly
+  price       Int
+  interval    String
   features    Json     @default("[]")
   isPopular   Boolean  @default(false)
   isActive    Boolean  @default(true)
@@ -275,10 +332,10 @@ model Order {
   razorpayOrderId     String   @unique
   razorpayPaymentId   String?
   razorpaySignature   String?
-  amount              Int      // INR paise
+  amount              Int
   currency            String   @default("INR")
-  status              String   @default("created")  // created | paid | failed
-  type                String   @default("subscription") // subscription | tokens
+  status              String   @default("created")
+  type                String   @default("subscription")
   tokenPack           Int?
   createdAt           DateTime @default(now())
   updatedAt           DateTime @updatedAt
@@ -316,7 +373,7 @@ model Upload {
 model DailySwipe {
   id        String   @id @default(uuid())
   userId    String
-  date      String   // YYYY-MM-DD
+  date      String
   count     Int      @default(0)
 
   user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
@@ -343,8 +400,6 @@ model XpEvent {
 // ─────────────────────────────────────────────────────────
 //  ADMIN
 // ─────────────────────────────────────────────────────────
-enum AdminRole { SUPER_ADMIN ADMIN MODERATOR ANALYST SUPPORT }
-
 model AdminUser {
   id           String    @id @default(uuid())
   email        String    @unique
@@ -366,8 +421,8 @@ model AdminUser {
 model AuditLog {
   id          String    @id @default(uuid())
   adminId     String
-  action      String    // user.ban, user.unban, plan.update, etc.
-  entityType  String    // user | session | order | plan
+  action      String
+  entityType  String
   entityId    String?
   details     Json?
   ip          String?
@@ -381,17 +436,18 @@ model AuditLog {
   @@map("audit_logs")
 }
 
-// ── V2 Challenge Models ────────────────────────────────────
-
+// ─────────────────────────────────────────────────────────
+//  CHALLENGES (V2)
+// ─────────────────────────────────────────────────────────
 model Challenge {
   id                  String   @id @default(uuid())
   title               String
-  description         String
-  type                String   // solo | duel | pack
+  description         String   @db.Text
+  type                String
   tier                Int      @default(1)
   activityType        String   @default("any")
   activityTag         String   @default("Any activity")
-  environment         String   @default("any")  // gym | outdoor | no_gym | any
+  environment         String   @default("any")
   cityId              String?
   startAt             DateTime
   endAt               DateTime
@@ -406,6 +462,11 @@ model Challenge {
   stations  ChallengeStation[]
   entries   ChallengeEntry[]
   feedPosts ChallengeFeedPost[]
+
+  @@index([tier])
+  @@index([type])
+  @@index([isActive])
+  @@map("challenges")
 }
 
 model ChallengeStation {
@@ -413,17 +474,20 @@ model ChallengeStation {
   challengeId      String
   stationNum       Int
   title            String
-  description      String
-  exerciseName     String  @default("")        // e.g. "Push-ups"
-  setsReps         String  @default("")        // e.g. "3 sets × 20 reps"
-  proofInstruction String  @default("Upload a photo or video of your workout") // exact proof guidance
+  description      String  @db.Text
+  exerciseName     String  @default("")
+  setsReps         String  @default("")
+  proofInstruction String  @default("Upload a photo or video of your workout") @db.VarChar(255)
   verifyType       String  @default("count")
   targetValue      Int     @default(1)
   buddyRequired    Boolean @default(false)
   xpReward         Int
 
-  challenge    Challenge           @relation(fields: [challengeId], references: [id])
+  challenge    Challenge           @relation(fields: [challengeId], references: [id], onDelete: Cascade)
   completions  StationCompletion[]
+
+  @@index([challengeId])
+  @@map("challenge_stations")
 }
 
 model ChallengeEntry {
@@ -440,10 +504,15 @@ model ChallengeEntry {
   lastSessionAt  DateTime?
   completedAt    DateTime?
 
-  challenge   Challenge           @relation(fields: [challengeId], references: [id])
-  user        User                @relation("UserChallenges", fields: [userId], references: [id])
-  buddy       User?               @relation("BuddyChallenges", fields: [buddyId], references: [id])
+  challenge   Challenge           @relation(fields: [challengeId], references: [id], onDelete: Cascade)
+  user        User                @relation("UserChallenges",  fields: [userId],   references: [id], onDelete: Cascade)
+  buddy       User?               @relation("BuddyChallenges", fields: [buddyId],  references: [id], onDelete: SetNull)
   completions StationCompletion[]
+
+  @@index([challengeId])
+  @@index([userId])
+  @@index([status])
+  @@map("challenge_entries")
 }
 
 model StationCompletion {
@@ -456,8 +525,12 @@ model StationCompletion {
   progressValue  Int      @default(0)
   isCollab       Boolean  @default(false)
 
-  entry   ChallengeEntry   @relation(fields: [entryId], references: [id])
-  station ChallengeStation @relation(fields: [stationId], references: [id])
+  entry   ChallengeEntry   @relation(fields: [entryId],   references: [id], onDelete: Cascade)
+  station ChallengeStation @relation(fields: [stationId], references: [id], onDelete: Cascade)
+
+  @@index([entryId])
+  @@index([stationId])
+  @@map("station_completions")
 }
 
 model ChallengeFeedPost {
@@ -468,13 +541,17 @@ model ChallengeFeedPost {
   stationTitle    String
   postedAt        DateTime @default(now())
   xpAwarded       Int
-  proofImageUrl   String?
+  proofImageUrl   String?  @db.Text
   isCollab        Boolean  @default(false)
   collabUserId    String?
   collabUserName  String?
-  collabAvatarUrl String?
+  collabAvatarUrl String?  @db.Text
   activitySlug    String?
 
-  challenge Challenge @relation(fields: [challengeId], references: [id])
-  user      User      @relation(fields: [userId], references: [id])
+  challenge Challenge @relation(fields: [challengeId], references: [id], onDelete: Cascade)
+  user      User      @relation("UserFeedPosts", fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([challengeId])
+  @@index([userId])
+  @@map("challenge_feed_posts")
 }

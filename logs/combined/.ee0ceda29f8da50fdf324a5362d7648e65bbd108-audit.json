@@ -5,6 +5,16 @@
     },
     "auditLog": "logs\\combined\\.ee0ceda29f8da50fdf324a5362d7648e65bbd108-audit.json",
     "files": [
+        {
+            "date": 1785335266000,
+            "name": "logs\\combined\\combined-2026-07-29.log",
+            "hash": "b3a179e787d5911c1f57f1b808024a1f92c1f9f69d5e6e133ce795e4e3b7daaa"
+        },
+        {
+            "date": 1785414116987,
+            "name": "logs\\combined\\combined-2026-07-30.log",
+            "hash": "02e9ed44cbfa0973c7521773cd28a96dbbd76a4c5d060973d23f38d215525d72"
+        }
     ],
     "hashType": "sha256"
 }
