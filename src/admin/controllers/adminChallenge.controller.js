@@ -147,3 +147,69 @@ exports.getEntries = async (req, res) => {
     res.status(500).json({ error: 'Failed to fetch entries' });
   }
 };
+
+// POST /admin/challenges/bulk
+exports.bulkCreate = async (req, res) => {
+  try {
+    const { challenges } = req.body;
+    if (!Array.isArray(challenges) || challenges.length === 0) {
+      return res.status(400).json({ error: 'challenges array is required' });
+    }
+
+    const created = [];
+    const failed  = [];
+
+    for (const ch of challenges) {
+      try {
+        const challenge = await prisma.challenge.create({
+          data: {
+            title:              ch.title,
+            description:        ch.description        || '',
+            type:               ch.type,
+            tier:               Number(ch.tier)       || 1,
+            environment:        ch.environment        || 'any',
+            activityTag:        ch.activityTag        || '⭐ Any activity',
+            activityType:       ch.environment        || 'any',
+            cityId:             ch.cityId             || null,
+            startAt:            new Date(ch.startAt),
+            endAt:              new Date(ch.endAt),
+            xpPool:             Number(ch.xpPool)     || 0,
+            entryLevelRequired: Number(ch.entryLevelRequired) || 1,
+            trustRequired:      Number(ch.trustRequired)      || 0,
+            maxParticipants:    ch.maxParticipants ? Number(ch.maxParticipants) : null,
+            isActive:           true,
+            stations: {
+              create: (ch.stations || []).map((s, i) => ({
+                stationNum:      i + 1,
+                title:           s.title             || '',
+                exerciseName:    s.exerciseName      || '',
+                setsReps:        s.setsReps          || '',
+                description:     s.description       || '',
+                proofInstruction:s.proofInstruction  || 'Upload a photo or video of your workout',
+                verifyType:      s.verifyType        || 'count',
+                targetValue:     Number(s.targetValue)   || 1,
+                buddyRequired:   s.buddyRequired     === true,
+                xpReward:        Number(s.xpReward)      || 0,
+              })),
+            },
+          },
+        });
+        created.push({ id: challenge.id, title: challenge.title });
+      } catch (err) {
+        console.error('[bulkCreate] Failed for:', ch.title, err.message);
+        failed.push({ title: ch.title, error: err.message });
+      }
+    }
+
+    res.status(201).json({
+      success:  true,
+      created:  created.length,
+      failed:   failed.length,
+      results:  created,
+      errors:   failed,
+    });
+  } catch (err) {
+    console.error('[bulkCreate]', err);
+    res.status(500).json({ error: 'Bulk import failed', detail: err.message });
+  }
+};
