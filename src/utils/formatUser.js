@@ -35,6 +35,7 @@ const formatUser = (u) => ({
   experienceLevel:   u.experienceLevel,
   goals:             parseJson(u.goals),
   primaryGym:        u.primaryGym,
+  searchRadius:      u.searchRadius ?? 10,
   // Gamification
   xpTotal:           u.xpTotal,
   level:             u.level,
@@ -49,8 +50,9 @@ const formatUser = (u) => ({
   subscriptionPlan:  u.subscriptionPlan,
   subscriptionExpiry:u.subscriptionExpiry,
   // Computed counts (joined via _count in queries)
-  buddyCount:        u._count?.matchesA ?? u.buddyCount  ?? 0,
-  sessionCount:      u._count?.sessionsAsUser ?? u.sessionCount ?? 0,
+  buddyCount:        u._count?.matchesA          ?? u.buddyCount     ?? 0,
+  sessionCount:      u._count?.sessionsAsUser     ?? u.sessionCount   ?? 0,
+  challengeCount:    u._count?.challengeEntries   ?? u.challengeCount ?? 0,
 });
 
 /** Public profile — returned for discover cards and buddy views */

@@ -106,6 +106,7 @@ model User {
   experienceLevel    String?
   goals              Json             @default("[]")
   primaryGym         String?
+  searchRadius       Int              @default(10)
 
   // Gamification
   xpTotal            Int              @default(0)
@@ -477,7 +478,7 @@ model ChallengeStation {
   description      String  @db.Text
   exerciseName     String  @default("")
   setsReps         String  @default("")
-  proofInstruction String  @default("Upload a photo or video of your workout") @db.VarChar(255)
+  proofInstruction String  @default("Upload a photo or video of your workout") @db.Text
   verifyType       String  @default("count")
   targetValue      Int     @default(1)
   buddyRequired    Boolean @default(false)

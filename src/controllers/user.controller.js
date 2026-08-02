@@ -10,7 +10,7 @@ const updateProfile = async (req, res, next) => {
       firstName, lastName, username, bio, city, country,
       gender, primaryActivity, activities, experienceLevel, goals,
       primaryGym, latitude, longitude, instagramHandle, phone,
-      avatarUrl, walkthroughSeen,
+      avatarUrl, walkthroughSeen, searchRadius,
     } = req.body;
 
     // Ensure username uniqueness when provided
@@ -41,9 +41,10 @@ const updateProfile = async (req, res, next) => {
         ...(primaryGym      !== undefined && { primaryGym }),
         ...(latitude        !== undefined && { latitude }),
         ...(longitude       !== undefined && { longitude }),
+        ...(searchRadius    !== undefined && { searchRadius: Number(searchRadius) }),
         ...(instagramHandle !== undefined && { instagramHandle }),
       },
-      include: { _count: { select: { matchesA: true, sessionsAsUser: true } } },
+      include: { _count: { select: { matchesA: true, sessionsAsUser: true, challengeEntries: true } } },
     });
 
     return res_.success(res, formatUser(user), 'Profile updated');
@@ -55,7 +56,7 @@ const getBuddyProfile = async (req, res, next) => {
   try {
     const user = await prisma.user.findUnique({
       where:   { id: req.params.id, status: 'ACTIVE', isBanned: false },
-      include: { _count: { select: { matchesA: true, sessionsAsUser: true } } },
+      include: { _count: { select: { matchesA: true, sessionsAsUser: true, challengeEntries: true } } },
     });
     if (!user) return res_.error(res, 'User not found', 404);
 
