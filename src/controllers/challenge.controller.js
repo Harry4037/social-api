@@ -60,17 +60,31 @@ exports.getChallenges = async (req, res) => {
 exports.getMyChallenges = async (req, res) => {
   try {
     const entries = await prisma.challengeEntry.findMany({
-      where:   { userId: req.user.id, status: { in: ['active', 'dormant'] } },
+      where:   { userId: req.user.id },  // all statuses including completed
       include: {
         completions: true,
         challenge: {
-          include: { stations: { orderBy: { stationNum: 'asc' } } },
+          select: {
+            id:    true,
+            title: true,
+            type:  true,
+            tier:  true,
+            environment: true,
+            activityTag: true,
+            stations: { orderBy: { stationNum: 'asc' } },
+          },
         },
       },
       orderBy: { joinedAt: 'desc' },
     });
 
-    return success(res, { entries });
+    // Flatten challengeTitle to top level for Flutter model
+    const formatted = entries.map(e => ({
+      ...e,
+      challengeTitle: e.challenge?.title ?? null,
+    }));
+
+    return success(res, { entries: formatted });
   } catch (err) {
     console.error('[getMyChallenges]', err);
     return error(res, 'Failed to fetch entries');

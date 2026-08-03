@@ -11,8 +11,8 @@ exports.list = async (req, res) => {
   try {
     const { page = 1, limit = 20, tier, type, active } = req.query;
     const where = {};
-    if (tier   !== undefined) where.tier     = Number(tier);
-    if (type   !== undefined) where.type     = type;
+    if (tier !== undefined) where.tier = Number(tier);
+    if (type !== undefined) where.type = type;
     if (active !== undefined) where.isActive = active === 'true';
 
     const [challenges, total] = await Promise.all([
@@ -63,24 +63,24 @@ exports.create = async (req, res) => {
         environment, activityTag,
         cityId: cityId || null,
         startAt: new Date(startAt),
-        endAt:   new Date(endAt),
-        xpPool:  Number(xpPool),
+        endAt: new Date(endAt),
+        xpPool: Number(xpPool),
         entryLevelRequired: Number(entryLevelRequired),
-        trustRequired:      Number(trustRequired),
+        trustRequired: Number(trustRequired),
         maxParticipants: maxParticipants ? Number(maxParticipants) : null,
         isActive: true,
         stations: {
           create: stations.map((s, i) => ({
-            stationNum:      i + 1,
-            title:           s.title,
-            exerciseName:    s.exerciseName    || '',
-            setsReps:        s.setsReps        || '',
-            description:     s.description,
-            proofInstruction:s.proofInstruction|| 'Upload a photo or video of your workout',
-            verifyType:      s.verifyType      || 'count',
-            targetValue:     Number(s.targetValue) || 1,
-            buddyRequired:   s.buddyRequired   === true,
-            xpReward:        Number(s.xpReward)    || 0,
+            stationNum: i + 1,
+            title: s.title,
+            exerciseName: s.exerciseName || '',
+            setsReps: s.setsReps || '',
+            description: s.description,
+            proofInstruction: s.proofInstruction || 'Upload a photo or video of your workout',
+            verifyType: s.verifyType || 'count',
+            targetValue: Number(s.targetValue) || 1,
+            buddyRequired: s.buddyRequired === true,
+            xpReward: Number(s.xpReward) || 0,
           })),
         },
       },
@@ -100,11 +100,11 @@ exports.update = async (req, res) => {
     const { id } = req.params;
     const { title, description, isActive, endAt, xpPool } = req.body;
     const data = {};
-    if (title       !== undefined) data.title     = title;
+    if (title !== undefined) data.title = title;
     if (description !== undefined) data.description = description;
-    if (isActive    !== undefined) data.isActive   = Boolean(isActive);
-    if (endAt       !== undefined) data.endAt      = new Date(endAt);
-    if (xpPool      !== undefined) data.xpPool     = Number(xpPool);
+    if (isActive !== undefined) data.isActive = Boolean(isActive);
+    if (endAt !== undefined) data.endAt = new Date(endAt);
+    if (xpPool !== undefined) data.xpPool = Number(xpPool);
 
     const challenge = await prisma.challenge.update({
       where: { id },
@@ -136,7 +136,7 @@ exports.getEntries = async (req, res) => {
     const entries = await prisma.challengeEntry.findMany({
       where: { challengeId: req.params.id },
       include: {
-        user:  { select: { id: true, firstName: true, lastName: true, avatarUrl: true } },
+        user: { select: { id: true, firstName: true, lastName: true, avatarUrl: true } },
         buddy: { select: { firstName: true, lastName: true } },
         completions: true,
       },
@@ -157,39 +157,39 @@ exports.bulkCreate = async (req, res) => {
     }
 
     const created = [];
-    const failed  = [];
+    const failed = [];
 
     for (const ch of challenges) {
       try {
         const challenge = await prisma.challenge.create({
           data: {
-            title:              ch.title,
-            description:        ch.description        || '',
-            type:               ch.type,
-            tier:               Number(ch.tier)       || 1,
-            environment:        ch.environment        || 'any',
-            activityTag:        ch.activityTag        || '⭐ Any activity',
-            activityType:       ch.environment        || 'any',
-            cityId:             ch.cityId             || null,
-            startAt:            new Date(ch.startAt),
-            endAt:              new Date(ch.endAt),
-            xpPool:             Number(ch.xpPool)     || 0,
+            title: ch.title,
+            description: ch.description || '',
+            type: ch.type,
+            tier: Number(ch.tier) || 1,
+            environment: ch.environment || 'any',
+            activityTag: ch.activityTag || '⭐ Any activity',
+            activityType: ch.environment || 'any',
+            cityId: ch.cityId || null,
+            startAt: new Date(ch.startAt),
+            endAt: new Date(ch.endAt),
+            xpPool: Number(ch.xpPool) || 0,
             entryLevelRequired: Number(ch.entryLevelRequired) || 1,
-            trustRequired:      Number(ch.trustRequired)      || 0,
-            maxParticipants:    ch.maxParticipants ? Number(ch.maxParticipants) : null,
-            isActive:           true,
+            trustRequired: Number(ch.trustRequired) || 0,
+            maxParticipants: ch.maxParticipants ? Number(ch.maxParticipants) : null,
+            isActive: true,
             stations: {
               create: (ch.stations || []).map((s, i) => ({
-                stationNum:      i + 1,
-                title:           s.title             || '',
-                exerciseName:    s.exerciseName      || '',
-                setsReps:        s.setsReps          || '',
-                description:     s.description       || '',
-                proofInstruction:s.proofInstruction  || 'Upload a photo or video of your workout',
-                verifyType:      s.verifyType        || 'count',
-                targetValue:     Number(s.targetValue)   || 1,
-                buddyRequired:   s.buddyRequired     === true,
-                xpReward:        Number(s.xpReward)      || 0,
+                stationNum: i + 1,
+                title: s.title || '',
+                exerciseName: s.exerciseName || '',
+                setsReps: s.setsReps || '',
+                description: s.description || '',
+                proofInstruction: s.proofInstruction || 'Upload a photo or video of your workout',
+                verifyType: s.verifyType || 'count',
+                targetValue: Number(s.targetValue) || 1,
+                buddyRequired: s.buddyRequired === true,
+                xpReward: Number(s.xpReward) || 0,
               })),
             },
           },
@@ -202,11 +202,11 @@ exports.bulkCreate = async (req, res) => {
     }
 
     res.status(201).json({
-      success:  true,
-      created:  created.length,
-      failed:   failed.length,
-      results:  created,
-      errors:   failed,
+      success: true,
+      created: created.length,
+      failed: failed.length,
+      results: created,
+      errors: failed,
     });
   } catch (err) {
     console.error('[bulkCreate]', err);
