@@ -1,56 +1,121 @@
-'use strict';
-const { v4: uuid } = require('uuid');
-const prisma     = require('../config/db');
-const res_       = require('../utils/response');
-const notifSvc   = require('../services/notification.service');
-const xpSvc      = require('../services/xp.service');
+// ─────────────────────────────────────────────────────────
+//  session.controller.js
+//  POST   /sessions          → scheduleSession
+//  GET    /sessions/my       → getMySessions
+//  POST   /sessions/:id/proof → uploadProof
+//  POST   /sessions/:id/confirm → confirmSession
+//  POST   /sessions/:id/respond → respondToInvite (confirm/decline)
+//  CRON   markIncomplete     → called by scheduler
+// ─────────────────────────────────────────────────────────
+const { PrismaClient } = require('@prisma/client');
+const { v4: uuid }     = require('uuid');
+const prisma           = new PrismaClient();
+const res_             = require('../utils/response');
+const notifSvc         = require('../services/notification.service');
 
-const SESSION_FIELDS = {
+// ── Session include fields ─────────────────────────────────
+const SESSION_INCLUDE = {
   include: {
-    user:      { select: { firstName: true, lastName: true } },
-    buddy:     { select: { firstName: true, lastName: true } },
-    challenge: { select: { id: true, title: true } },
+    user:         { select: { id:true, firstName:true, lastName:true, avatarUrl:true } },
+    buddy:        { select: { id:true, firstName:true, lastName:true, avatarUrl:true } },
+    challenge:    { select: { id:true, title:true, activityTag:true } },
+    participants: {
+      include: {
+        user: { select: { id:true, firstName:true, lastName:true, avatarUrl:true } },
+      },
+    },
   },
 };
 
 const formatSession = (s) => ({
-  id:                  s.id,
-  userId:              s.userId,
-  buddyId:             s.buddyId,
-  buddyName:           s.buddy ? `${s.buddy.firstName} ${s.buddy.lastName}` : null,
-  activity:            s.activity,
-  gymName:             s.gymName,
-  scheduledAt:         s.scheduledAt,
-  status:              s.status,
-  proofImageUrl:       s.proofImageUrl,
-  proofVideoUrl:       s.proofVideoUrl,
-  proofUploadedAt:     s.proofUploadedAt,
-  xpEarned:            s.xpEarned,
-  tokensDeducted:      s.tokensDeducted,
-  notes:               s.notes,
-  challengeId:         s.challengeId         ?? null,
-  challengeTitle:      s.challenge?.title    ?? null,
-  challengeStationNum: s.challengeStationNum ?? null,
-  createdAt:           s.createdAt,
+  id:               s.id,
+  userId:           s.userId,
+  buddyId:          s.buddyId,
+  buddyName:        s.buddy
+      ? `${s.buddy.firstName} ${s.buddy.lastName}` : null,
+  buddyAvatar:      s.buddy?.avatarUrl ?? null,
+  activity:         s.activity,
+  gymName:          s.gymName,
+  scheduledAt:      s.scheduledAt,
+  durationMins:     s.durationMins,
+  endTime:          s.endTime,
+  status:           s.status,
+  proofImageUrl:    s.proofImageUrl,
+  proofVideoUrl:    s.proofVideoUrl,
+  proofUploadedAt:  s.proofUploadedAt,
+  xpEarned:         s.xpEarned,
+  tokensDeducted:   s.tokensDeducted,
+  notes:            s.notes,
+  incompleteReason: s.incompleteReason,
+  challengeId:      s.challengeId,
+  challengeTitle:   s.challenge?.title ?? null,
+  chatId:           s.chatId,
+  participants:     (s.participants ?? []).map(p => ({
+    id:        p.id,
+    userId:    p.userId,
+    name:      `${p.user.firstName} ${p.user.lastName}`,
+    avatarUrl: p.user.avatarUrl,
+    status:    p.status,
+  })),
+  createdAt:        s.createdAt,
 });
 
-// POST /sessions
+// ── POST /sessions ─────────────────────────────────────────
 const scheduleSession = async (req, res, next) => {
   try {
-    const { buddyId, activity, scheduledAt, gymName, notes } = req.body;
+    const {
+      buddyIds = [],    // array — [] for solo (but match required), [id] for buddy, [id,id,...] for group
+      activity,
+      scheduledAt,
+      durationMins = 60,
+      gymName,
+      notes,
+      challengeId,
+    } = req.body;
 
+    // Validate duration
+    const validDurations = [45, 60, 90, 120];
+    const duration = validDurations.includes(Number(durationMins))
+        ? Number(durationMins) : 60;
+
+    // Validate scheduledAt
     const dt = new Date(scheduledAt);
     if (isNaN(dt) || dt < new Date()) {
       return res_.error(res, 'scheduledAt must be a future date', 422);
     }
 
-    // ── BUDDY SESSION — MUST have active match ────────────
-    if (buddyId) {
+    // Calculate endTime
+    const endTime = new Date(dt.getTime() + duration * 60 * 1000);
+
+    // ── Match validation — REQUIRED even for solo ─────────
+    // User must have at least one active match
+    const anyMatch = await prisma.match.findFirst({
+      where: {
+        OR: [
+          { userAId: req.user.id, status: 'active' },
+          { userBId: req.user.id, status: 'active' },
+        ],
+      },
+    });
+
+    if (!anyMatch) {
+      return res_.error(
+        res,
+        'You need at least one buddy match to schedule sessions. Find workout partners on Discover!',
+        403
+      );
+    }
+
+    // ── Validate each buddy in buddyIds ───────────────────
+    const validatedBuddyIds = [];
+    for (const bId of buddyIds) {
+      if (bId === req.user.id) continue; // skip self
+
       const match = await prisma.match.findFirst({
         where: {
           OR: [
-            { userAId: req.user.id, userBId: buddyId, status: 'active' },
-            { userAId: buddyId, userBId: req.user.id, status: 'active' },
+            { userAId: req.user.id, userBId: bId, status: 'active' },
+            { userAId: bId, userBId: req.user.id, status: 'active' },
           ],
         },
       });
@@ -58,177 +123,323 @@ const scheduleSession = async (req, res, next) => {
       if (!match) {
         return res_.error(
           res,
-          'You can only schedule sessions with your Seshlly buddies. Connect with someone first!',
+          `You can only invite your Seshlly buddies. No match found with user ${bId}`,
           403
         );
       }
-
-      const buddy = await prisma.user.findUnique({
-        where:  { id: buddyId, status: 'ACTIVE', isBanned: false },
-        select: { id: true, firstName: true },
-      });
-      if (!buddy) return res_.error(res, 'Buddy not found or inactive', 404);
+      validatedBuddyIds.push(bId);
     }
 
-    // ── Create session (solo or buddy) ────────────────────
+    // Max 10 participants (including creator)
+    if (validatedBuddyIds.length > 9) {
+      return res_.error(res, 'Maximum 9 buddies allowed per session (10 total)', 422);
+    }
+
+    // buddyId = first buddy for backward compat (2-person session)
+    const primaryBuddyId = validatedBuddyIds[0] ?? null;
+    const isGroup        = validatedBuddyIds.length > 1;
+
+    // ── Create group chat if 3+ people ───────────────────
+    let chatId = null;
+    if (isGroup) {
+      // Create group chat
+      const groupChat = await prisma.chat.create({
+        data: {
+          isGroup:   true,
+          groupName: `${activity} Session`,
+          members: {
+            create: [
+              { userId: req.user.id, isAdmin: true },
+              ...validatedBuddyIds.map(id => ({ userId: id })),
+            ],
+          },
+        },
+      });
+      chatId = groupChat.id;
+    }
+
+    // ── Create session ────────────────────────────────────
     const session = await prisma.workoutSession.create({
       data: {
         id:          uuid(),
         userId:      req.user.id,
-        buddyId:     buddyId || null,
+        buddyId:     primaryBuddyId,
         activity,
-        scheduledAt: dt,
         gymName:     gymName || null,
-        notes:       notes   || null,
+        scheduledAt: dt,
+        durationMins: duration,
+        endTime,
+        notes:       notes || null,
+        challengeId: challengeId || null,
+        chatId:      chatId || null,
+        status:      validatedBuddyIds.length > 0 ? 'pending_confirmation' : 'confirmed',
+        // Solo with match: confirmed immediately
+        // Buddy/Group: pending until all confirm
       },
-      ...SESSION_FIELDS,
+      ...SESSION_INCLUDE,
     });
 
-    // ── Mirror session for buddy + notification ───────────
-    if (buddyId) {
-      await prisma.workoutSession.create({
-        data: {
-          id:          uuid(),
-          userId:      buddyId,
-          buddyId:     req.user.id,
-          activity,
-          scheduledAt: dt,
-          gymName:     gymName || null,
-          notes:       notes   || null,
+    // ── Create participant records ─────────────────────────
+    if (validatedBuddyIds.length > 0) {
+      await prisma.sessionParticipant.createMany({
+        data: [
+          // Creator — auto confirmed
+          { id: uuid(), sessionId: session.id, userId: req.user.id, status: 'confirmed', respondedAt: new Date() },
+          // Invitees — pending
+          ...validatedBuddyIds.map(bId => ({
+            id: uuid(), sessionId: session.id, userId: bId, status: 'pending',
+          })),
+        ],
+        skipDuplicates: true,
+      });
+    }
+
+    // ── Send session_invite message in chat + notification ─
+    const me = await prisma.user.findUnique({
+      where:  { id: req.user.id },
+      select: { firstName: true, lastName: true },
+    });
+    const myName = `${me.firstName} ${me.lastName}`;
+
+    const inviteMetadata = {
+      sessionId:   session.id,
+      activity,
+      scheduledAt: dt.toISOString(),
+      endTime:     endTime.toISOString(),
+      durationMins: duration,
+      gymName:     gymName || null,
+      challengeId: challengeId || null,
+    };
+
+    for (const bId of validatedBuddyIds) {
+      // Find their 1-on-1 chat
+      const chat1on1 = await prisma.chat.findFirst({
+        where: {
+          isGroup: false,
+          OR: [
+            { userAId: req.user.id, userBId: bId },
+            { userAId: bId, userBId: req.user.id },
+          ],
         },
       });
 
-      const me = await prisma.user.findUnique({
-        where:  { id: req.user.id },
-        select: { firstName: true, lastName: true },
-      });
-      await notifSvc.notifySessionScheduled(
-        buddyId,
-        `${me.firstName} ${me.lastName}`,
-        session.id
-      );
+      if (chat1on1) {
+        // Send session invite message
+        await prisma.message.create({
+          data: {
+            id:       uuid(),
+            chatId:   chat1on1.id,
+            senderId: req.user.id,
+            content:  `${myName} invited you to a ${activity} session on ${dt.toDateString()}`,
+            type:     'session_invite',
+            metadata: inviteMetadata,
+          },
+        });
+      }
+
+      // Push notification
+      await notifSvc.notifySessionScheduled(bId, myName, session.id);
     }
 
     return res_.created(res, formatSession(session), 'Session scheduled');
   } catch (e) { next(e); }
 };
 
-// GET /sessions/my
+// ── GET /sessions/my ───────────────────────────────────────
 const getMySessions = async (req, res, next) => {
   try {
-    const { status, page = 1, limit = 20 } = req.query;
-    const skip = (Number(page) - 1) * Number(limit);
-    const where = { userId: req.user.id, ...(status && { status }) };
+    const { status, page = 1 } = req.query;
+    const take = 20;
+    const skip = (Number(page) - 1) * take;
 
-    const [sessions, total] = await Promise.all([
-      prisma.workoutSession.findMany({
-        where,
-        ...SESSION_FIELDS,
-        orderBy: { scheduledAt: 'desc' },
-        skip,
-        take: Number(limit),
-      }),
-      prisma.workoutSession.count({ where }),
-    ]);
+    const where = {
+      OR: [
+        { userId:  req.user.id },
+        { buddyId: req.user.id },
+        {
+          participants: { some: { userId: req.user.id } },
+        },
+      ],
+      ...(status ? { status } : {}),
+    };
 
-    return res_.paginated(res, sessions.map(formatSession), { page, limit, total });
+    const sessions = await prisma.workoutSession.findMany({
+      where,
+      orderBy: { scheduledAt: 'desc' },
+      take,
+      skip,
+      ...SESSION_INCLUDE,
+    });
+
+    return res_.success(res, { sessions: sessions.map(formatSession) });
   } catch (e) { next(e); }
 };
 
-// POST /sessions/:id/proof
+// ── POST /sessions/:id/respond — Confirm or Decline invite ─
+const respondToInvite = async (req, res, next) => {
+  try {
+    const { action } = req.body; // 'confirm' | 'decline'
+    if (!['confirm', 'decline'].includes(action)) {
+      return res_.error(res, 'action must be confirm or decline', 422);
+    }
+
+    const session = await prisma.workoutSession.findUnique({
+      where:   { id: req.params.id },
+      include: { participants: true },
+    });
+    if (!session) return res_.error(res, 'Session not found', 404);
+
+    // Update participant status
+    const participant = await prisma.sessionParticipant.findFirst({
+      where: { sessionId: session.id, userId: req.user.id },
+    });
+    if (!participant) return res_.error(res, 'You are not invited to this session', 403);
+
+    await prisma.sessionParticipant.update({
+      where: { id: participant.id },
+      data:  {
+        status:      action === 'confirm' ? 'confirmed' : 'declined',
+        respondedAt: new Date(),
+      },
+    });
+
+    // If declined → session cancelled
+    if (action === 'decline') {
+      await prisma.workoutSession.update({
+        where: { id: session.id },
+        data:  { status: 'cancelled', incompleteReason: `${req.user.id} declined the invite` },
+      });
+      // Notify creator
+      await notifSvc.sendNotification(session.userId, {
+        type:    'session',
+        title:   'Session Declined',
+        message: 'A buddy declined your session invite.',
+        data:    { sessionId: session.id },
+      });
+      return res_.success(res, {}, 'Session declined');
+    }
+
+    // If all confirmed → session status = confirmed
+    const pending = await prisma.sessionParticipant.count({
+      where: { sessionId: session.id, status: 'pending' },
+    });
+
+    if (pending === 0) {
+      await prisma.workoutSession.update({
+        where: { id: session.id },
+        data:  { status: 'confirmed' },
+      });
+      // Notify creator — all confirmed
+      await notifSvc.notifySessionConfirmed(session.userId, req.user.id, session.id);
+    }
+
+    return res_.success(res, {}, 'Response recorded');
+  } catch (e) { next(e); }
+};
+
+// ── POST /sessions/:id/proof ───────────────────────────────
 const uploadProof = async (req, res, next) => {
   try {
     const session = await prisma.workoutSession.findFirst({
-      where: { id: req.params.id, userId: req.user.id },
+      where: {
+        id: req.params.id,
+        OR: [
+          { userId:  req.user.id },
+          { buddyId: req.user.id },
+          { participants: { some: { userId: req.user.id } } },
+        ],
+      },
+      ...SESSION_INCLUDE,
     });
     if (!session) return res_.error(res, 'Session not found', 404);
-    if (session.status === 'completed') return res_.error(res, 'Proof already uploaded', 409);
 
     const { proofImageUrl } = req.body;
     if (!proofImageUrl) return res_.error(res, 'proofImageUrl is required', 422);
 
-    // ── Option 1: Time window validation ─────────────────────────
-    // Proof must be uploaded within 2 hours of each other for buddy sessions
-    // For solo sessions, standard 8-hour window applies
-    const now          = new Date();
-    const sessionTime  = new Date(session.scheduledAt);
-    const hoursElapsed = (now - sessionTime) / (1000 * 60 * 60);
+    const now     = new Date();
+    const endTime = new Date(session.endTime);
 
-    if (hoursElapsed > 8) {
-      return res_.error(res, 'Proof window closed — must upload within 8 hours of session time', 422);
+    // Proof window: endTime → endTime + 3 hours
+    if (now < endTime) {
+      return res_.error(res, 'Session has not ended yet. Proof can be uploaded after session ends.', 422);
+    }
+    const proofDeadline = new Date(endTime.getTime() + 3 * 60 * 60 * 1000);
+    if (now > proofDeadline) {
+      return res_.error(res, 'Proof window closed — must upload within 3 hours of session end', 422);
     }
 
-    const xpAmount = 50;
-    const updated  = await prisma.workoutSession.update({
+    const updated = await prisma.workoutSession.update({
       where: { id: session.id },
-      data: {
+      data:  {
         proofImageUrl,
-        proofUploadedAt: new Date(),
-        status:          session.buddyId ? 'proof_uploaded' : 'completed', // buddy session waits for buddy confirm
-        xpEarned:        xpAmount,
+        proofUploadedAt: now,
+        status: session.buddyId ? 'proof_uploaded' : 'completed',
+        xpEarned: session.buddyId ? null : 50, // solo = immediate XP
       },
-      ...SESSION_FIELDS,
+      ...SESSION_INCLUDE,
     });
 
-    await xpSvc.awardXp(req.user.id, 'session_uploaded');
-
-    // If buddy session — notify buddy to confirm
-    if (session.buddyId) {
+    // Buddy session → notify buddy to confirm
+    if (session.buddyId && session.buddyId !== req.user.id) {
       await notifSvc.notifyProofUploaded(session.buddyId, req.user.id, session.id);
-      return res_.success(res, formatSession(updated), 'Proof uploaded — waiting for buddy confirmation');
     }
 
-    return res_.success(res, formatSession(updated), 'Proof uploaded — session completed!');
+    return res_.success(res, formatSession(updated), 'Proof uploaded');
   } catch (e) { next(e); }
 };
 
-// ── POST /sessions/:id/confirm ─────────────────────────────────
-// Option 3: Buddy confirms "haan hum saath the"
+// ── POST /sessions/:id/confirm (buddy confirms proof) ──────
 const confirmSession = async (req, res, next) => {
   try {
-    // Find the mirror session where this user is the buddy
     const session = await prisma.workoutSession.findFirst({
-      where: {
-        id:      req.params.id,
-        buddyId: req.user.id,   // current user must be the buddy of this session
-        status:  'proof_uploaded',
-      },
+      where: { id: req.params.id, buddyId: req.user.id, status: 'proof_uploaded' },
+      ...SESSION_INCLUDE,
     });
-    if (!session) return res_.error(res, 'Session not found or not ready for confirmation', 404);
+    if (!session) return res_.error(res, 'Session not found or not awaiting your confirmation', 404);
 
-    // Check time window — buddy must confirm within 2 hours of original proof
+    // 2hr confirmation window
     const proofTime    = new Date(session.proofUploadedAt);
     const hoursElapsed = (new Date() - proofTime) / (1000 * 60 * 60);
     if (hoursElapsed > 2) {
-      return res_.error(res, 'Confirmation window closed — buddy must confirm within 2 hours of proof upload', 422);
+      return res_.error(res, 'Confirmation window closed — must confirm within 2 hours of proof upload', 422);
     }
 
-    // Mark original session as completed
     const updated = await prisma.workoutSession.update({
       where: { id: session.id },
-      data:  { status: 'completed' },
-      ...SESSION_FIELDS,
+      data:  { status: 'completed', xpEarned: 100 }, // both get XP
+      ...SESSION_INCLUDE,
     });
 
-    // Also mark the buddy's own mirror session as completed
-    await prisma.workoutSession.updateMany({
-      where: {
-        userId:      req.user.id,
-        buddyId:     session.userId,
-        scheduledAt: session.scheduledAt,
-        status:      { not: 'completed' },
-      },
-      data: { status: 'completed', xpEarned: 50 },
-    });
-
-    // Award XP to buddy for confirming
-    await xpSvc.awardXp(req.user.id, 'session_uploaded');
-
-    // Notify original user that buddy confirmed
     await notifSvc.notifySessionConfirmed(session.userId, req.user.id, session.id);
 
-    return res_.success(res, formatSession(updated), 'Session confirmed — both of you earned XP!');
+    return res_.success(res, formatSession(updated), 'Session confirmed!');
   } catch (e) { next(e); }
 };
 
-module.exports = { scheduleSession, getMySessions, uploadProof, confirmSession };
+// ── CRON: Mark sessions incomplete ────────────────────────
+// Call this every 15 minutes via a scheduler
+const markIncomplete = async () => {
+  const now          = new Date();
+  const deadline3hr  = new Date(now.getTime() - 3 * 60 * 60 * 1000);
+
+  // Sessions whose endTime + 3hrs has passed and proof not uploaded
+  await prisma.workoutSession.updateMany({
+    where: {
+      status:  { in: ['confirmed', 'pending_confirmation', 'scheduled'] },
+      endTime: { lt: deadline3hr },
+    },
+    data: {
+      status:           'incomplete',
+      incompleteReason: 'Proof not uploaded within 3 hours of session end',
+    },
+  });
+};
+
+module.exports = {
+  scheduleSession,
+  getMySessions,
+  uploadProof,
+  confirmSession,
+  respondToInvite,
+  markIncomplete,
+};

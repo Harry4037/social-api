@@ -26,10 +26,13 @@ enum SubscriptionPlan {
 
 enum SessionStatus {
   scheduled
+  pending_confirmation
+  confirmed
+  proof_uploaded
   completed
+  incomplete
   missed
   cancelled
-  proof_uploaded
 }
 
 enum MessageType {
@@ -148,6 +151,8 @@ model User {
   challengeEntries     ChallengeEntry[]   @relation("UserChallenges")
   buddyChallenges      ChallengeEntry[]   @relation("BuddyChallenges")
   challengeFeedPosts   ChallengeFeedPost[] @relation("UserFeedPosts")
+  sessionParticipants  SessionParticipant[] @relation("SessionParticipants")
+  chatMemberships      ChatMember[]        @relation("ChatMembers")
 
   @@index([email])
   @@index([city])
@@ -194,9 +199,10 @@ model Swipe {
 }
 
 model Match {
-  id        String   @id @default(uuid())
+  id        String      @id @default(uuid())
   userAId   String
   userBId   String
+  status    String      @default("active") // active | unmatched
   createdAt DateTime @default(now())
 
   userA     User     @relation("MatchUserA", fields: [userAId], references: [id], onDelete: Cascade)
@@ -215,28 +221,55 @@ model Match {
 model WorkoutSession {
   id               String        @id @default(uuid())
   userId           String
-  buddyId          String?
+  buddyId          String?       // kept for 2-person sessions
   activity         String
   gymName          String?
   scheduledAt      DateTime
-  status           SessionStatus @default(scheduled)
+  durationMins     Int           @default(60)  // 45 | 60 | 90 | 120
+  endTime          DateTime      // scheduledAt + durationMins
+  status           SessionStatus @default(pending_confirmation)
   proofImageUrl    String?       @db.Text
   proofVideoUrl    String?       @db.Text
   proofUploadedAt  DateTime?
   xpEarned         Int?
   tokensDeducted   Int?
   notes            String?       @db.Text
+  incompleteReason String?
+  challengeId      String?       // linked challenge if any
+  chatId           String?       // group chat if group session
   createdAt        DateTime      @default(now())
   updatedAt        DateTime      @updatedAt
 
   user             User          @relation("SessionUser",  fields: [userId],  references: [id], onDelete: Cascade)
   buddy            User?         @relation("SessionBuddy", fields: [buddyId], references: [id], onDelete: SetNull)
+  challenge        Challenge?    @relation("WorkoutChallenge", fields: [challengeId], references: [id], onDelete: SetNull)
+  participants     SessionParticipant[]
 
   @@index([userId])
   @@index([buddyId])
   @@index([status])
   @@index([scheduledAt])
+  @@index([endTime])
+  @@index([challengeId])
   @@map("workout_sessions")
+}
+
+// Group session participants (up to 10)
+model SessionParticipant {
+  id          String   @id @default(uuid())
+  sessionId   String
+  userId      String
+  status      String   @default("pending") // pending | confirmed | declined
+  respondedAt DateTime?
+  createdAt   DateTime @default(now())
+
+  session     WorkoutSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  user        User           @relation("SessionParticipants", fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([sessionId, userId])
+  @@index([sessionId])
+  @@index([userId])
+  @@map("session_participants")
 }
 
 // ─────────────────────────────────────────────────────────
@@ -244,22 +277,43 @@ model WorkoutSession {
 // ─────────────────────────────────────────────────────────
 model Chat {
   id            String    @id @default(uuid())
-  matchId       String    @unique
-  userAId       String
-  userBId       String
+  matchId       String?   @unique   // null for group chats
+  userAId       String?             // null for group chats
+  userBId       String?             // null for group chats
+  isGroup       Boolean   @default(false)
+  groupName     String?
   lastMessage   String?   @db.Text
   lastMessageAt DateTime?
   createdAt     DateTime  @default(now())
   updatedAt     DateTime  @updatedAt
 
-  match         Match     @relation(fields: [matchId],  references: [id], onDelete: Cascade)
-  userA         User      @relation("ChatUserA", fields: [userAId], references: [id], onDelete: Cascade)
-  userB         User      @relation("ChatUserB", fields: [userBId], references: [id], onDelete: Cascade)
+  match         Match?    @relation(fields: [matchId],  references: [id], onDelete: Cascade)
+  userA         User?     @relation("ChatUserA", fields: [userAId], references: [id], onDelete: Cascade)
+  userB         User?     @relation("ChatUserB", fields: [userBId], references: [id], onDelete: Cascade)
   messages      Message[]
+  members       ChatMember[]
 
   @@index([userAId])
   @@index([userBId])
+  @@index([isGroup])
   @@map("chats")
+}
+
+// Group chat members
+model ChatMember {
+  id       String   @id @default(uuid())
+  chatId   String
+  userId   String
+  joinedAt DateTime @default(now())
+  isAdmin  Boolean  @default(false)
+
+  chat     Chat     @relation(fields: [chatId], references: [id], onDelete: Cascade)
+  user     User     @relation("ChatMembers", fields: [userId],  references: [id], onDelete: Cascade)
+
+  @@unique([chatId, userId])
+  @@index([chatId])
+  @@index([userId])
+  @@map("chat_members")
 }
 
 model Message {
@@ -461,7 +515,8 @@ model Challenge {
   updatedAt           DateTime @updatedAt
 
   stations  ChallengeStation[]
-  entries   ChallengeEntry[]
+  entries   ChallengeEntry[]  @relation("EntryChallenge")
+  sessions  WorkoutSession[]  @relation("WorkoutChallenge")
   feedPosts ChallengeFeedPost[]
 
   @@index([tier])
@@ -505,7 +560,7 @@ model ChallengeEntry {
   lastSessionAt  DateTime?
   completedAt    DateTime?
 
-  challenge   Challenge           @relation(fields: [challengeId], references: [id], onDelete: Cascade)
+  challenge   Challenge           @relation("EntryChallenge", fields: [challengeId], references: [id], onDelete: Cascade)
   user        User                @relation("UserChallenges",  fields: [userId],   references: [id], onDelete: Cascade)
   buddy       User?               @relation("BuddyChallenges", fields: [buddyId],  references: [id], onDelete: SetNull)
   completions StationCompletion[]

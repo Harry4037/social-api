@@ -77,6 +77,10 @@ sessionRouter.post('/:id/proof', authenticate, [
 sessionRouter.post('/:id/confirm', authenticate, [
   param('id').isUUID(),
 ], validate, sessCtrl.confirmSession);
+sessionRouter.post('/:id/respond', authenticate, [
+  param('id').isUUID(),
+  body('action').isIn(['confirm', 'decline']),
+], validate, sessCtrl.respondToInvite);
 
 // ── /chat ─────────────────────────────────────────────────
 const chatRouter = express.Router();
