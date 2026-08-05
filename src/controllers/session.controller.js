@@ -6,26 +6,32 @@ const notifSvc   = require('../services/notification.service');
 const xpSvc      = require('../services/xp.service');
 
 const SESSION_FIELDS = {
-  include: { user: { select: { firstName: true, lastName: true } },
-             buddy: { select: { firstName: true, lastName: true } } },
+  include: {
+    user:      { select: { firstName: true, lastName: true } },
+    buddy:     { select: { firstName: true, lastName: true } },
+    challenge: { select: { id: true, title: true } },
+  },
 };
 
 const formatSession = (s) => ({
-  id:              s.id,
-  userId:          s.userId,
-  buddyId:         s.buddyId,
-  buddyName:       s.buddy ? `${s.buddy.firstName} ${s.buddy.lastName}` : null,
-  activity:        s.activity,
-  gymName:         s.gymName,
-  scheduledAt:     s.scheduledAt,
-  status:          s.status,
-  proofImageUrl:   s.proofImageUrl,
-  proofVideoUrl:   s.proofVideoUrl,
-  proofUploadedAt: s.proofUploadedAt,
-  xpEarned:        s.xpEarned,
-  tokensDeducted:  s.tokensDeducted,
-  notes:           s.notes,
-  createdAt:       s.createdAt,
+  id:                  s.id,
+  userId:              s.userId,
+  buddyId:             s.buddyId,
+  buddyName:           s.buddy ? `${s.buddy.firstName} ${s.buddy.lastName}` : null,
+  activity:            s.activity,
+  gymName:             s.gymName,
+  scheduledAt:         s.scheduledAt,
+  status:              s.status,
+  proofImageUrl:       s.proofImageUrl,
+  proofVideoUrl:       s.proofVideoUrl,
+  proofUploadedAt:     s.proofUploadedAt,
+  xpEarned:            s.xpEarned,
+  tokensDeducted:      s.tokensDeducted,
+  notes:               s.notes,
+  challengeId:         s.challengeId         ?? null,
+  challengeTitle:      s.challenge?.title    ?? null,
+  challengeStationNum: s.challengeStationNum ?? null,
+  createdAt:           s.createdAt,
 });
 
 // POST /sessions
@@ -38,13 +44,33 @@ const scheduleSession = async (req, res, next) => {
       return res_.error(res, 'scheduledAt must be a future date', 422);
     }
 
-    // If buddyId provided, verify the buddy exists and is a real match
+    // ── BUDDY SESSION — MUST have active match ────────────
     if (buddyId) {
-      const buddy = await prisma.user.findUnique({ where: { id: buddyId } });
-      if (!buddy) return res_.error(res, 'Buddy not found', 404);
+      const match = await prisma.match.findFirst({
+        where: {
+          OR: [
+            { userAId: req.user.id, userBId: buddyId, status: 'active' },
+            { userAId: buddyId, userBId: req.user.id, status: 'active' },
+          ],
+        },
+      });
+
+      if (!match) {
+        return res_.error(
+          res,
+          'You can only schedule sessions with your Seshlly buddies. Connect with someone first!',
+          403
+        );
+      }
+
+      const buddy = await prisma.user.findUnique({
+        where:  { id: buddyId, status: 'ACTIVE', isBanned: false },
+        select: { id: true, firstName: true },
+      });
+      if (!buddy) return res_.error(res, 'Buddy not found or inactive', 404);
     }
 
-    // Create session for the current user
+    // ── Create session (solo or buddy) ────────────────────
     const session = await prisma.workoutSession.create({
       data: {
         id:          uuid(),
@@ -58,14 +84,13 @@ const scheduleSession = async (req, res, next) => {
       ...SESSION_FIELDS,
     });
 
-    // If buddy session — also create a mirror session for the buddy
-    // so it appears in their Sessions tab too
+    // ── Mirror session for buddy + notification ───────────
     if (buddyId) {
       await prisma.workoutSession.create({
         data: {
           id:          uuid(),
-          userId:      buddyId,           // buddy is the owner of this mirror session
-          buddyId:     req.user.id,       // original scheduler is their buddy
+          userId:      buddyId,
+          buddyId:     req.user.id,
           activity,
           scheduledAt: dt,
           gymName:     gymName || null,
@@ -73,12 +98,15 @@ const scheduleSession = async (req, res, next) => {
         },
       });
 
-      // Notify buddy
       const me = await prisma.user.findUnique({
-        where: { id: req.user.id },
+        where:  { id: req.user.id },
         select: { firstName: true, lastName: true },
       });
-      await notifSvc.notifySessionScheduled(buddyId, `${me.firstName} ${me.lastName}`, session.id);
+      await notifSvc.notifySessionScheduled(
+        buddyId,
+        `${me.firstName} ${me.lastName}`,
+        session.id
+      );
     }
 
     return res_.created(res, formatSession(session), 'Session scheduled');
