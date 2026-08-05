@@ -27,7 +27,7 @@ const SESSION_INCLUDE = {
   },
 };
 
-const formatSession = (s) => ({
+const formatSession = (s, currentUserId = null) => ({
   id:               s.id,
   userId:           s.userId,
   buddyId:          s.buddyId,
@@ -39,7 +39,12 @@ const formatSession = (s) => ({
   scheduledAt:      s.scheduledAt,
   durationMins:     s.durationMins,
   endTime:          s.endTime,
+  // Session status: scheduled | completed | missed
   status:           s.status,
+  // Invite status from SessionParticipant: pending | confirmed | declined
+  inviteStatus:     currentUserId
+      ? (s.participants?.find(p => p.userId === currentUserId)?.status ?? null)
+      : null,
   proofImageUrl:    s.proofImageUrl,
   proofVideoUrl:    s.proofVideoUrl,
   proofUploadedAt:  s.proofUploadedAt,
@@ -55,7 +60,7 @@ const formatSession = (s) => ({
     userId:    p.userId,
     name:      `${p.user.firstName} ${p.user.lastName}`,
     avatarUrl: p.user.avatarUrl,
-    status:    p.status,
+    status:    p.status,           // pending | confirmed | declined
   })),
   createdAt:        s.createdAt,
 });
@@ -172,9 +177,7 @@ const scheduleSession = async (req, res, next) => {
         notes:       notes || null,
         challengeId: challengeId || null,
         chatId:      chatId || null,
-        status:      validatedBuddyIds.length > 0 ? 'pending_confirmation' : 'confirmed',
-        // Solo with match: confirmed immediately
-        // Buddy/Group: pending until all confirm
+        status:      'scheduled', // always scheduled — invite status tracked in SessionParticipant
       },
       ...SESSION_INCLUDE,
     });
@@ -271,7 +274,7 @@ const getMySessions = async (req, res, next) => {
       ...SESSION_INCLUDE,
     });
 
-    return res_.success(res, { sessions: sessions.map(formatSession) });
+    return res_.success(res, { sessions: sessions.map(s => formatSession(s, req.user.id)) });
   } catch (e) { next(e); }
 };
 
@@ -303,33 +306,24 @@ const respondToInvite = async (req, res, next) => {
       },
     });
 
-    // If declined → session cancelled
+    // If declined → notify creator, session stays 'scheduled'
     if (action === 'decline') {
-      await prisma.workoutSession.update({
-        where: { id: session.id },
-        data:  { status: 'cancelled', incompleteReason: `${req.user.id} declined the invite` },
-      });
-      // Notify creator
       await notifSvc.sendNotification(session.userId, {
         type:    'session',
-        title:   'Session Declined',
+        title:   'Session Invite Declined',
         message: 'A buddy declined your session invite.',
         data:    { sessionId: session.id },
       });
       return res_.success(res, {}, 'Session declined');
     }
 
-    // If all confirmed → session status = confirmed
+    // If confirmed → check if all participants confirmed
     const pending = await prisma.sessionParticipant.count({
       where: { sessionId: session.id, status: 'pending' },
     });
 
     if (pending === 0) {
-      await prisma.workoutSession.update({
-        where: { id: session.id },
-        data:  { status: 'confirmed' },
-      });
-      // Notify creator — all confirmed
+      // All confirmed — notify creator
       await notifSvc.notifySessionConfirmed(session.userId, req.user.id, session.id);
     }
 
@@ -373,7 +367,7 @@ const uploadProof = async (req, res, next) => {
       data:  {
         proofImageUrl,
         proofUploadedAt: now,
-        status: session.buddyId ? 'proof_uploaded' : 'completed',
+        status: session.buddyId ? 'scheduled' : 'completed', // solo: completed immediately
         xpEarned: session.buddyId ? null : 50, // solo = immediate XP
       },
       ...SESSION_INCLUDE,
@@ -392,7 +386,7 @@ const uploadProof = async (req, res, next) => {
 const confirmSession = async (req, res, next) => {
   try {
     const session = await prisma.workoutSession.findFirst({
-      where: { id: req.params.id, buddyId: req.user.id, status: 'proof_uploaded' },
+      where: { id: req.params.id, buddyId: req.user.id, status: 'scheduled' },
       ...SESSION_INCLUDE,
     });
     if (!session) return res_.error(res, 'Session not found or not awaiting your confirmation', 404);
@@ -425,12 +419,12 @@ const markIncomplete = async () => {
   // Sessions whose endTime + 3hrs has passed and proof not uploaded
   await prisma.workoutSession.updateMany({
     where: {
-      status:  { in: ['confirmed', 'pending_confirmation', 'scheduled'] },
+      status:  'scheduled',
       endTime: { lt: deadline3hr },
     },
     data: {
-      status:           'incomplete',
-      incompleteReason: 'Proof not uploaded within 3 hours of session end',
+      status:           'missed',
+      incompleteReason: 'Proof not uploaded within 3 hours of session end', // status=missed
     },
   });
 };

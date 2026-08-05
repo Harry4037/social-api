@@ -25,14 +25,9 @@ enum SubscriptionPlan {
 }
 
 enum SessionStatus {
-  scheduled
-  pending_confirmation
-  confirmed
-  proof_uploaded
-  completed
-  incomplete
-  missed
-  cancelled
+  scheduled     // session booked, upcoming
+  completed     // proof uploaded + buddy confirmed
+  missed        // 3hr window passed, no proof uploaded
 }
 
 enum MessageType {
@@ -227,7 +222,7 @@ model WorkoutSession {
   scheduledAt      DateTime
   durationMins     Int           @default(60)  // 45 | 60 | 90 | 120
   endTime          DateTime      // scheduledAt + durationMins
-  status           SessionStatus @default(pending_confirmation)
+  status           SessionStatus @default(scheduled)
   proofImageUrl    String?       @db.Text
   proofVideoUrl    String?       @db.Text
   proofUploadedAt  DateTime?
@@ -533,7 +528,7 @@ model ChallengeStation {
   description      String  @db.Text
   exerciseName     String  @default("")
   setsReps         String  @default("")
-  proofInstruction String  @default("Upload a photo or video of your workout")
+  proofInstruction String  @default("Upload a photo or video of your workout") @db.Text
   verifyType       String  @default("count")
   targetValue      Int     @default(1)
   buddyRequired    Boolean @default(false)
