@@ -533,7 +533,7 @@ model ChallengeStation {
   description      String  @db.Text
   exerciseName     String  @default("")
   setsReps         String  @default("")
-  proofInstruction String  @default("Upload a photo or video of your workout") @db.Text
+  proofInstruction String  @default("Upload a photo or video of your workout")
   verifyType       String  @default("count")
   targetValue      Int     @default(1)
   buddyRequired    Boolean @default(false)
