@@ -129,8 +129,16 @@ const challengeLeaderboardCtrl = require('../controllers/challenge.controller');
 const globalLeaderboardRouter = express.Router();
 globalLeaderboardRouter.get('/', authenticate, challengeLeaderboardCtrl.getGlobalLeaderboard);
 
+// ── /feed — 24hr global challenge feed ────────────────────
+const feedRouter = express.Router();
+feedRouter.get ('/', authenticate, challengeLeaderboardCtrl.getGlobalFeed);
+feedRouter.post('/', authenticate, [
+  body('challengeId').isUUID(),
+  body('stationTitle').notEmpty(),
+], validate, challengeLeaderboardCtrl.postToFeed);
+
 module.exports = {
   userRouter, matchRouter, sessionRouter, chatRouter,
   notifRouter, subRouter, tokensRouter, uploadRouter,
-  challengeRouter, globalLeaderboardRouter,
+  challengeRouter, globalLeaderboardRouter, feedRouter,
 };

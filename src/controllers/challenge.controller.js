@@ -287,3 +287,93 @@ exports.getGlobalLeaderboard = async (req, res) => {
     return error(res, 'Failed to fetch global leaderboard');
   }
 };
+
+// ── GET /feed — Global challenge feed (last 24hrs) ────────
+exports.getGlobalFeed = async (req, res) => {
+  try {
+    const since24h = new Date(Date.now() - 24 * 60 * 60 * 1000);
+
+    const posts = await prisma.challengeFeedPost.findMany({
+      where: { expiresAt: { gt: new Date() } },
+      include: {
+        user:      { select: { id:true, firstName:true, lastName:true, avatarUrl:true, city:true } },
+        challenge: { select: { id:true, title:true, activityTag:true } },
+      },
+      orderBy: { postedAt: 'desc' },
+      take: 50,
+    });
+
+    const formatted = posts.map(p => ({
+      id:             p.id,
+      userId:         p.userId,
+      displayName:    `${p.user.firstName} ${p.user.lastName}`,
+      avatarUrl:      p.user.avatarUrl,
+      city:           p.user.city,
+      challengeId:    p.challengeId,
+      challengeTitle: p.challenge.title,
+      activityTag:    p.challenge.activityTag,
+      stationNum:     p.stationNum,
+      stationTitle:   p.stationTitle,
+      postedAt:       p.postedAt,
+      expiresAt:      p.expiresAt,
+      xpAwarded:      p.xpAwarded,
+      proofImageUrl:  p.proofImageUrl,
+      isCollab:       p.isCollab,
+      collabUserName: p.collabUserName,
+      collabAvatarUrl:p.collabAvatarUrl,
+      caption:        p.caption,
+      groupPhotoUrl:  p.groupPhotoUrl,
+      groupName:      p.groupName,
+    }));
+
+    return success(res, { posts: formatted, count: formatted.length });
+  } catch (err) {
+    console.error('[getGlobalFeed]', err);
+    return error(res, 'Failed to fetch feed');
+  }
+};
+
+// ── POST /feed — Post to global feed after session/challenge ─
+exports.postToFeed = async (req, res) => {
+  try {
+    const {
+      challengeId, stationNum, stationTitle, xpAwarded,
+      proofImageUrl, isCollab, collabUserId, collabUserName,
+      collabAvatarUrl, activitySlug, caption,
+      groupPhotoUrl, groupName,
+    } = req.body;
+
+    if (!challengeId || !stationTitle) {
+      return error(res, 'challengeId and stationTitle required', 400);
+    }
+
+    const now      = new Date();
+    const expiresAt = new Date(now.getTime() + 24 * 60 * 60 * 1000); // +24h
+
+    const post = await prisma.challengeFeedPost.create({
+      data: {
+        challengeId,
+        userId:         req.user.id,
+        stationNum:     stationNum || 0,
+        stationTitle,
+        xpAwarded:      xpAwarded  || 0,
+        proofImageUrl:  proofImageUrl  || null,
+        isCollab:       isCollab   || false,
+        collabUserId:   collabUserId   || null,
+        collabUserName: collabUserName || null,
+        collabAvatarUrl:collabAvatarUrl|| null,
+        activitySlug:   activitySlug   || null,
+        caption:        caption        || null,
+        groupPhotoUrl:  groupPhotoUrl  || null,
+        groupName:      groupName      || null,
+        postedAt:  now,
+        expiresAt,
+      },
+    });
+
+    return created(res, { post }, 'Posted to feed');
+  } catch (err) {
+    console.error('[postToFeed]', err);
+    return error(res, 'Failed to post to feed');
+  }
+};

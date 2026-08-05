@@ -541,6 +541,7 @@ model ChallengeFeedPost {
   stationNum      Int
   stationTitle    String
   postedAt        DateTime @default(now())
+  expiresAt       DateTime // 24 hours after postedAt — auto-expire
   xpAwarded       Int
   proofImageUrl   String?  @db.Text
   isCollab        Boolean  @default(false)
@@ -548,6 +549,9 @@ model ChallengeFeedPost {
   collabUserName  String?
   collabAvatarUrl String?  @db.Text
   activitySlug    String?
+  caption         String?  @db.Text
+  groupPhotoUrl   String?  @db.Text
+  groupName       String?
 
   challenge Challenge @relation(fields: [challengeId], references: [id], onDelete: Cascade)
   user      User      @relation("UserFeedPosts", fields: [userId], references: [id], onDelete: Cascade)

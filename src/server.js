@@ -19,7 +19,7 @@ const { startJobs, stopJobs } = require('./schedulers/scheduler');
 const {
   userRouter, matchRouter, sessionRouter, chatRouter,
   notifRouter, subRouter, tokensRouter, uploadRouter,
-  challengeRouter, globalLeaderboardRouter,
+  challengeRouter, globalLeaderboardRouter, feedRouter,
 } = require('./routes/index');
 const authRoutes  = require('./routes/auth.routes');
 const adminRoutes = require('./admin/routes/admin.routes');
@@ -86,6 +86,7 @@ app.use(`${API}/tokens`,             tokensRouter);
 app.use(`${API}/upload`,             uploadRouter);
 app.use(`${API}/challenges`,         challengeRouter);
 app.use(`${API}/global-leaderboard`, globalLeaderboardRouter);
+app.use(`${API}/feed`,               feedRouter);
 app.use(`${API}/admin`,              adminRoutes);
 
 // ── 404 ───────────────────────────────────────────────────
