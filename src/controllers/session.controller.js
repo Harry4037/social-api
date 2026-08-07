@@ -144,6 +144,40 @@ const scheduleSession = async (req, res, next) => {
     const primaryBuddyId = validatedBuddyIds[0] ?? null;
     const isGroup        = validatedBuddyIds.length > 1;
 
+    // ── Same-day duplicate check ─────────────────────────
+    // Only one session allowed per buddy pair per day
+    if (validatedBuddyIds.length > 0) {
+      const todayStart = new Date();
+      todayStart.setHours(0, 0, 0, 0);
+      const todayEnd = new Date();
+      todayEnd.setHours(23, 59, 59, 999);
+
+      for (const bId of validatedBuddyIds) {
+        const existing = await prisma.workoutSession.findFirst({
+          where: {
+            status:      'scheduled',
+            scheduledAt: { gte: todayStart, lte: todayEnd },
+            OR: [
+              { userId: req.user.id, buddyId: bId },
+              { userId: bId, buddyId: req.user.id },
+            ],
+          },
+        });
+
+        if (existing) {
+          const buddy = await prisma.user.findUnique({
+            where:  { id: bId },
+            select: { firstName: true },
+          });
+          return res_.error(
+            res,
+            `You already have a session scheduled with ${buddy?.firstName ?? 'this buddy'} today. You can book again tomorrow!`,
+            409
+          );
+        }
+      }
+    }
+
     // ── Create group chat if 3+ people ───────────────────
     let chatId = null;
     if (isGroup) {
