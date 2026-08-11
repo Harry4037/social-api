@@ -59,6 +59,14 @@ services:
     networks:
       - fitconnect-network
 
+  adminer:
+    image: adminer:latest
+    container_name: fitconnect-adminer
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8080:8080"
+    networks:
+      - fitconnect-network
 
 volumes:
   mysql_data:
