@@ -15,6 +15,11 @@ const prisma      = require('./config/db');
 const { errorHandler, defaultLimiter } = require('./middleware/middleware');
 const { initSocket } = require('./sockets/socket');
 const { startJobs, stopJobs } = require('./schedulers/scheduler');
+// CRON — markIncomplete sessions every 15 mins
+require('./cron');
+// CMS Routes
+const cmsRouter = require('./routes/cms.routes');
+
 
 const {
   userRouter, matchRouter, sessionRouter, chatRouter,
@@ -87,6 +92,7 @@ app.use(`${API}/upload`,             uploadRouter);
 app.use(`${API}/challenges`,         challengeRouter);
 app.use(`${API}/global-leaderboard`, globalLeaderboardRouter);
 app.use(`${API}/feed`,               feedRouter);
+app.use('/api/cms',                  cmsRouter);  // Website CMS panel
 app.use(`${API}/admin`,              adminRoutes);
 
 // ── 404 ───────────────────────────────────────────────────
@@ -96,14 +102,14 @@ app.use((_req, res) => res.status(404).json({ success: false, message: 'Route no
 app.use(errorHandler);
 
 // ── Start ─────────────────────────────────────────────────
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT || 5000;
 
 const startServer = async () => {
   try {
     await prisma.$connect();
     logger.info('✅  Database connected');
 
-    server.listen(PORT, '0.0.0.0', () => {
+    server.listen(PORT, () => {
       logger.info(`🚀  FitConnect API running on port ${PORT}`);
       logger.info(`    ${API}/auth  |  ${API}/match  |  ${API}/sessions  etc.`);
     });

@@ -528,7 +528,7 @@ model ChallengeStation {
   description      String  @db.Text
   exerciseName     String  @default("")
   setsReps         String  @default("")
-  proofInstruction String  @default("Upload a photo or video of your workout")
+  proofInstruction String  @default("Upload a photo or video of your workout") @db.Text
   verifyType       String  @default("count")
   targetValue      Int     @default(1)
   buddyRequired    Boolean @default(false)
@@ -609,4 +609,142 @@ model ChallengeFeedPost {
   @@index([challengeId])
   @@index([userId])
   @@map("challenge_feed_posts")
+}
+
+// ─────────────────────────────────────────────────────────
+//  CMS — Website Admin Panel Models
+// ─────────────────────────────────────────────────────────
+
+// Blog articles
+model BlogArticle {
+  id          String   @id @default(uuid())
+  title       String
+  slug        String   @unique
+  excerpt     String?  @db.Text
+  content     String   @db.Text
+  category    String   // member_story | challenge | fitness_industry | app_update | upcoming
+  status      String   @default("draft") // draft | published
+  authorId    String
+  featuredImg String?
+  metaTitle   String?
+  metaDesc    String?  @db.Text
+  publishedAt DateTime?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  author      AdminUser @relation("BlogAuthor", fields: [authorId], references: [id], onDelete: Cascade)
+
+  @@index([slug])
+  @@index([status])
+  @@index([category])
+  @@map("blog_articles")
+}
+
+// SEO settings per page
+model SeoPage {
+  id          String   @id @default(uuid())
+  pageKey     String   @unique // home | blog | download | blog_post
+  pageUrl     String
+  metaTitle   String
+  metaDesc    String   @db.Text
+  canonical   String?
+  ogImage     String?
+  hreflang    String   @default("en-IN")
+  updatedAt   DateTime @updatedAt
+
+  faqs        SeoFaq[]
+
+  @@map("seo_pages")
+}
+
+// FAQ schema for AEO
+model SeoFaq {
+  id        String   @id @default(uuid())
+  pageId    String
+  question  String
+  answer    String   @db.Text
+  order     Int      @default(0)
+  createdAt DateTime @default(now())
+
+  page      SeoPage  @relation(fields: [pageId], references: [id], onDelete: Cascade)
+
+  @@index([pageId])
+  @@map("seo_faqs")
+}
+
+// Website content (hero, stats, testimonials etc)
+model WebsiteContent {
+  id        String   @id @default(uuid())
+  key       String   @unique // hero_headline | hero_sub | stat_1_val | testimonial_1 etc
+  value     String   @db.Text
+  updatedBy String?
+  updatedAt DateTime @updatedAt
+
+  @@map("website_content")
+}
+
+// Social links
+model SocialLink {
+  id        String   @id @default(uuid())
+  key       String   @unique // instagram | facebook | app_store | play_store | support_email
+  label     String
+  url       String
+  updatedAt DateTime @updatedAt
+
+  @@map("social_links")
+}
+
+// Admin users (CMS access)
+model AdminUser {
+  id           String   @id @default(uuid())
+  name         String
+  email        String   @unique
+  passwordHash String
+  role         String   @default("custom") // super_admin | blog_editor | seo_manager | website_manager | custom
+  status       String   @default("pending") // active | pending | revoked
+  invitedBy    String?
+  lastActiveAt DateTime?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  permissions  AdminPermission?
+  articles     BlogArticle[]    @relation("BlogAuthor")
+
+  @@map("admin_users")
+}
+
+// Per-user granular permissions
+model AdminPermission {
+  id              String   @id @default(uuid())
+  adminId         String   @unique
+  // Blog
+  blogView        Boolean  @default(false)
+  blogCreate      Boolean  @default(false)
+  blogEdit        Boolean  @default(false)
+  blogDelete      Boolean  @default(false)
+  blogPublish     Boolean  @default(false)
+  // SEO
+  seoView         Boolean  @default(false)
+  seoEditMeta     Boolean  @default(false)
+  seoEditFaq      Boolean  @default(false)
+  seoSitemap      Boolean  @default(false)
+  // Website Content
+  contentView     Boolean  @default(false)
+  contentHero     Boolean  @default(false)
+  contentStats    Boolean  @default(false)
+  contentTestimon Boolean  @default(false)
+  // Social
+  socialView      Boolean  @default(false)
+  socialEdit      Boolean  @default(false)
+  // App Users
+  appUsersView    Boolean  @default(false)
+  appUsersBan     Boolean  @default(false)
+  // Challenges
+  challengesView  Boolean  @default(false)
+  challengesCreate Boolean @default(false)
+  challengesEdit  Boolean  @default(false)
+
+  admin           AdminUser @relation(fields: [adminId], references: [id], onDelete: Cascade)
+
+  @@map("admin_permissions")
 }
