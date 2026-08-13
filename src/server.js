@@ -18,7 +18,8 @@ const { startJobs, stopJobs } = require('./schedulers/scheduler');
 // CRON — markIncomplete sessions every 15 mins
 require('./cron');
 // CMS Routes
-const cmsRouter = require('./routes/cms.routes');
+const cmsRouter    = require('./routes/cms.routes');
+const strikeRouter = require('./routes/strike.routes');
 
 
 const {
@@ -92,7 +93,8 @@ app.use(`${API}/upload`,             uploadRouter);
 app.use(`${API}/challenges`,         challengeRouter);
 app.use(`${API}/global-leaderboard`, globalLeaderboardRouter);
 app.use(`${API}/feed`,               feedRouter);
-app.use('/api/cms',                  cmsRouter);  // Website CMS panel
+app.use('/api/cms',                  cmsRouter);     // Website CMS panel
+app.use(`${API}/strikes`,            strikeRouter);  // Strike 2 — Buddy Strike
 app.use(`${API}/admin`,              adminRoutes);
 
 // ── 404 ───────────────────────────────────────────────────

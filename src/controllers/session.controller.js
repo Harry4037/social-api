@@ -12,6 +12,7 @@ const { v4: uuid }     = require('uuid');
 const prisma           = new PrismaClient();
 const res_             = require('../utils/response');
 const notifSvc         = require('../services/notification.service');
+const xpCtrl           = require('./xp.controller');
 
 // ── Session include fields ─────────────────────────────────
 const SESSION_INCLUDE = {
@@ -432,35 +433,50 @@ const confirmSession = async (req, res, next) => {
       return res_.error(res, 'Confirmation window closed — must confirm within 2 hours of proof upload', 422);
     }
 
-    const updated = await prisma.workoutSession.update({
+    // Mark completed first
+    await prisma.workoutSession.update({
       where: { id: session.id },
-      data:  { status: 'completed', xpEarned: 100 }, // both get XP
+      data:  { status: 'completed' },
+    });
+
+    // Award XP + Trust + Token to both users
+    const participantCount = (session.participants?.length || 0) + 2;
+    const xpResults = await xpCtrl.onSessionComplete(session, participantCount);
+
+    const updated = await prisma.workoutSession.findFirst({
+      where: { id: session.id },
       ...SESSION_INCLUDE,
     });
 
     await notifSvc.notifySessionConfirmed(session.userId, req.user.id, session.id);
 
-    return res_.success(res, formatSession(updated), 'Session confirmed!');
+    return res_.success(res, {
+      session: formatSession(updated),
+      rewards: xpResults,
+    }, 'Session confirmed! XP and Trust awarded.');
   } catch (e) { next(e); }
 };
 
 // ── CRON: Mark sessions incomplete ────────────────────────
 // Call this every 15 minutes via a scheduler
 const markIncomplete = async () => {
-  const now          = new Date();
-  const deadline3hr  = new Date(now.getTime() - 3 * 60 * 60 * 1000);
+  const now         = new Date();
+  const deadline3hr = new Date(now.getTime() - 3 * 60 * 60 * 1000);
 
-  // Sessions whose endTime + 3hrs has passed and proof not uploaded
-  await prisma.workoutSession.updateMany({
+  // Find sessions whose proof window expired
+  const expiredSessions = await prisma.workoutSession.findMany({
     where: {
       status:  'scheduled',
       endTime: { lt: deadline3hr },
     },
-    data: {
-      status:           'missed',
-      incompleteReason: 'Proof not uploaded within 3 hours of session end', // status=missed
-    },
   });
+
+  for (const session of expiredSessions) {
+    // Apply Trust -5 + Token -1 + mark missed
+    await xpCtrl.onSessionMissed(session);
+  }
+
+  return { marked: expiredSessions.length };
 };
 
 module.exports = {

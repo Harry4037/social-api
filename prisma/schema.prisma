@@ -108,9 +108,11 @@ model User {
 
   // Gamification
   xpTotal            Int              @default(0)
+  weeklyXp           Int              @default(0)
+  monthlyXp          Int              @default(0)
   level              Int              @default(1)
   chatTokens         Int              @default(20)
-  trustScore         Decimal          @default(50.00) @db.Decimal(5,2)
+  trustScore         Decimal          @default(30.00) @db.Decimal(5,2)
   idVerified         Boolean          @default(false)
 
   // Influencer
@@ -148,6 +150,8 @@ model User {
   challengeFeedPosts   ChallengeFeedPost[] @relation("UserFeedPosts")
   sessionParticipants  SessionParticipant[] @relation("SessionParticipants")
   chatMemberships      ChatMember[]        @relation("ChatMembers")
+  strikesSent          BuddyStrike[]       @relation("StrikeSender")
+  strikesReceived      BuddyStrike[]       @relation("StrikeReceiver")
 
   @@index([email])
   @@index([city])
@@ -194,15 +198,19 @@ model Swipe {
 }
 
 model Match {
-  id        String      @id @default(uuid())
-  userAId   String
-  userBId   String
-  status    String      @default("active") // active | unmatched
-  createdAt DateTime @default(now())
+  id                 String    @id @default(uuid())
+  userAId            String
+  userBId            String
+  status             String    @default("active") // active | unmatched
+  buddyStrikeStreak  Int       @default(0)         // Strike 2 streak count
+  strikeCount        Int       @default(0)         // Total strikes sent
+  lastStrikeAt       DateTime?                     // Last strike sent timestamp
+  createdAt          DateTime  @default(now())
 
-  userA     User     @relation("MatchUserA", fields: [userAId], references: [id], onDelete: Cascade)
-  userB     User     @relation("MatchUserB", fields: [userBId], references: [id], onDelete: Cascade)
+  userA     User         @relation("MatchUserA", fields: [userAId], references: [id], onDelete: Cascade)
+  userB     User         @relation("MatchUserB", fields: [userBId], references: [id], onDelete: Cascade)
   chat      Chat?
+  strikes   BuddyStrike[]
 
   @@unique([userAId, userBId])
   @@index([userAId])
@@ -747,4 +755,30 @@ model AdminPermission {
   admin           AdminUser @relation(fields: [adminId], references: [id], onDelete: Cascade)
 
   @@map("admin_permissions")
+}
+
+// ─────────────────────────────────────────────────────────
+//  STRIKE 2 — Buddy Strike (Snap style)
+// ─────────────────────────────────────────────────────────
+model BuddyStrike {
+  id          String    @id @default(uuid())
+  senderId    String
+  receiverId  String
+  matchId     String
+  imageUrl    String    @db.Text
+  caption     String?
+  reactEmoji  String?                  // 💪🔥😤🏆🤝😮
+  viewedAt    DateTime?                // null = not viewed yet
+  expiresAt   DateTime                 // 24hrs if not viewed, 5min after view
+  createdAt   DateTime  @default(now())
+
+  sender   User  @relation("StrikeSender",   fields: [senderId],   references: [id], onDelete: Cascade)
+  receiver User  @relation("StrikeReceiver", fields: [receiverId], references: [id], onDelete: Cascade)
+  match    Match @relation(fields: [matchId], references: [id],    onDelete: Cascade)
+
+  @@index([senderId])
+  @@index([receiverId])
+  @@index([matchId])
+  @@index([expiresAt])
+  @@map("buddy_strikes")
 }
