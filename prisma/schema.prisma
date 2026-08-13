@@ -62,14 +62,6 @@ enum UploadFolder {
   covers
 }
 
-enum AdminRole {
-  SUPER_ADMIN
-  ADMIN
-  MODERATOR
-  ANALYST
-  SUPPORT
-}
-
 // ─────────────────────────────────────────────────────────
 //  USER
 // ─────────────────────────────────────────────────────────
@@ -462,16 +454,22 @@ model AdminUser {
   id           String    @id @default(uuid())
   email        String    @unique
   passwordHash String
-  firstName    String
-  lastName     String
-  role         AdminRole @default(SUPPORT)
+  firstName    String?
+  lastName     String?
+  name         String?                          // CMS display name
+  role         String    @default("custom")     // super_admin | blog_editor | seo_manager | website_manager | custom | SUPPORT | MODERATOR
   avatarUrl    String?
   isActive     Boolean   @default(true)
+  status       String    @default("pending")    // active | pending | revoked (CMS)
+  invitedBy    String?
   lastLoginAt  DateTime?
+  lastActiveAt DateTime?
   createdAt    DateTime  @default(now())
   updatedAt    DateTime  @updatedAt
 
   auditLogs    AuditLog[]
+  permissions  AdminPermission?
+  articles     BlogArticle[]    @relation("BlogAuthor")
 
   @@map("admin_users")
 }
@@ -702,24 +700,6 @@ model SocialLink {
   @@map("social_links")
 }
 
-// Admin users (CMS access)
-model AdminUser {
-  id           String   @id @default(uuid())
-  name         String
-  email        String   @unique
-  passwordHash String
-  role         String   @default("custom") // super_admin | blog_editor | seo_manager | website_manager | custom
-  status       String   @default("pending") // active | pending | revoked
-  invitedBy    String?
-  lastActiveAt DateTime?
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
-
-  permissions  AdminPermission?
-  articles     BlogArticle[]    @relation("BlogAuthor")
-
-  @@map("admin_users")
-}
 
 // Per-user granular permissions
 model AdminPermission {
