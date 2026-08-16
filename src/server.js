@@ -98,7 +98,7 @@ app.use(`${API}/feed`,               feedRouter);
 app.use('/api/cms',                  cmsRouter);     // Website CMS panel
 app.use(`${API}/strikes`,            strikeRouter);   // Strike 2
 app.use(`${API}/influencer`,         influencerRouter); // Influencer system
-app.use(`${API}/match`,              matchRouter);      // Swipe + match requests
+// app.use(`${API}/match`,              matchRouter);      // Swipe + match requests
 app.use(`${API}/admin`,              adminRoutes);
 
 // ── 404 ───────────────────────────────────────────────────
