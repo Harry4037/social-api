@@ -4,7 +4,7 @@
 //  Auth: JWT + role check middleware
 // ─────────────────────────────────────────────────────────
 const { PrismaClient } = require('@prisma/client');
-const bcrypt           = require('bcrypt');
+const bcrypt           = require('bcryptjs');
 const jwt              = require('jsonwebtoken');
 const { v4: uuid }     = require('uuid');
 const prisma           = new PrismaClient();

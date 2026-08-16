@@ -108,9 +108,13 @@ model User {
   idVerified         Boolean          @default(false)
 
   // Influencer
-  isInfluencer       Boolean          @default(false)
-  instagramHandle    String?
-  instagramFollowers Int?
+  isInfluencer            Boolean   @default(false)
+  instagramHandle         String?                     // All users can add (optional)
+  instagramFollowers      Int?                        // Verified followers (admin set)
+  influencerBio           String?   @db.Text          // Fitness niche description
+  instagramVerifiedAt     DateTime?                   // When IG was verified by admin
+  influencerAppliedAt     DateTime?                   // When they applied
+  influencerSessionLimit  Int       @default(3)        // Max sessions/month fans can book
 
   // Subscription
   subscriptionPlan   SubscriptionPlan @default(free)
@@ -144,12 +148,16 @@ model User {
   chatMemberships      ChatMember[]        @relation("ChatMembers")
   strikesSent          BuddyStrike[]       @relation("StrikeSender")
   strikesReceived      BuddyStrike[]       @relation("StrikeReceiver")
+  influencerApplication InfluencerApplication?  @relation("UserApplication")
+  influencerSessions   InfluencerSession[]      @relation("InfluencerSessions")
+  fanSessions          InfluencerSession[]      @relation("FanSessions")
 
   @@index([email])
   @@index([city])
   @@index([latitude, longitude])
   @@index([subscriptionPlan])
   @@index([primaryActivity])
+  @@index([isInfluencer])
   @@map("users")
 }
 
@@ -761,4 +769,49 @@ model BuddyStrike {
   @@index([matchId])
   @@index([expiresAt])
   @@map("buddy_strikes")
+}
+
+// ─────────────────────────────────────────────────────────
+//  INFLUENCER SYSTEM
+// ─────────────────────────────────────────────────────────
+
+model InfluencerApplication {
+  id               String    @id @default(uuid())
+  userId           String    @unique
+  instagramHandle  String                          // "fitness_rahul_123"
+  claimedFollowers Int                             // Self-reported by user
+  verificationCode String                          // "SESHLLY-X7K9P2" auto-generated
+  codeExpiresAt    DateTime                        // +7 days from apply
+  status           String    @default("pending")   // pending|code_added|approved|rejected
+  rejectedReason   String?
+  canReapplyAt     DateTime?                       // +30 days from rejection
+  reviewedBy       String?                         // Super Admin ID
+  reviewedAt       DateTime?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  user             User      @relation("UserApplication", fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([status])
+  @@index([userId])
+  @@map("influencer_applications")
+}
+
+// Track monthly session limit per influencer-fan pair
+model InfluencerSession {
+  id           String   @id @default(uuid())
+  influencerId String
+  fanId        String
+  monthYear    String                              // "2025-08" format
+  sessionCount Int      @default(0)               // Max 3 per month
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  influencer   User     @relation("InfluencerSessions", fields: [influencerId], references: [id], onDelete: Cascade)
+  fan          User     @relation("FanSessions",         fields: [fanId],        references: [id], onDelete: Cascade)
+
+  @@unique([influencerId, fanId, monthYear])
+  @@index([influencerId])
+  @@index([fanId])
+  @@map("influencer_sessions")
 }
