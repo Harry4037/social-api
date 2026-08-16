@@ -15,13 +15,10 @@ const prisma      = require('./config/db');
 const { errorHandler, defaultLimiter } = require('./middleware/middleware');
 const { initSocket } = require('./sockets/socket');
 const { startJobs, stopJobs } = require('./schedulers/scheduler');
-// CRON — markIncomplete sessions every 15 mins
-require('./cron');
-// CMS Routes
-const cmsRouter    = require('./routes/cms.routes');
+// CMS + Strike + Influencer routes
+const cmsRouter        = require('./routes/cms.routes');
 const strikeRouter     = require('./routes/strike.routes');
 const influencerRouter = require('./routes/influencer.routes');
-// const matchRouter      = require('./routes/match.routes');
 
 
 const {
@@ -95,8 +92,8 @@ app.use(`${API}/upload`,             uploadRouter);
 app.use(`${API}/challenges`,         challengeRouter);
 app.use(`${API}/global-leaderboard`, globalLeaderboardRouter);
 app.use(`${API}/feed`,               feedRouter);
-app.use('/api/cms',                  cmsRouter);     // Website CMS panel
-app.use(`${API}/strikes`,            strikeRouter);   // Strike 2
+app.use('/api/cms',                  cmsRouter);        // Website CMS panel
+app.use(`${API}/strikes`,            strikeRouter);     // Strike 2 — Buddy Strike
 app.use(`${API}/influencer`,         influencerRouter); // Influencer system
 app.use(`${API}/admin`,              adminRoutes);
 

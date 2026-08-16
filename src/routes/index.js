@@ -52,7 +52,6 @@ matchRouter.delete('/buddies/:buddyId', authenticate, [
 matchRouter.post('/nudge/:buddyId', authenticate, [
   param('buddyId').isUUID(),
 ], validate, async (req, res) => {
-  // Simple nudge — sends a push notification to buddy
   try {
     const { success } = require('../utils/response');
     return success(res, { nudged: true });
@@ -60,6 +59,25 @@ matchRouter.post('/nudge/:buddyId', authenticate, [
     res.status(500).json({ success: false, message: 'Nudge failed' });
   }
 });
+
+// ── NEW: Swipe + Match Requests ──────────────────────────
+// Requires match_controller_addon.js merged into match.controller.js
+// Guard: only register if functions exist (prevents crash if not merged yet)
+if (typeof matchCtrl.swipe === 'function') {
+  matchRouter.post('/swipe', authenticate, swipeLimiter, [
+    body('targetId').isUUID().withMessage('Valid targetId required'),
+    body('action').optional().isIn(['like','skip','super_like']),
+  ], validate, matchCtrl.swipe);
+}
+if (typeof matchCtrl.getMatchRequests === 'function') {
+  matchRouter.get('/requests',                      authenticate, matchCtrl.getMatchRequests);
+  matchRouter.post('/requests/:swipeId/accept',    authenticate, [
+    param('swipeId').isUUID(),
+  ], validate, matchCtrl.acceptRequest);
+  matchRouter.post('/requests/:swipeId/decline',   authenticate, [
+    param('swipeId').isUUID(),
+  ], validate, matchCtrl.declineRequest);
+}
 
 // ── /sessions ─────────────────────────────────────────────
 const sessionRouter = express.Router();

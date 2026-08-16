@@ -2,11 +2,11 @@
 const express = require('express');
 const { body, param } = require('express-validator');
 const { validate } = require('../middleware/middleware');
-const auth = require('../middleware/auth');
+const { authenticate } = require('../middleware/auth');
 const inf  = require('../controllers/influencer.controller');
 
 const router = express.Router();
-router.use(auth);
+router.use(authenticate);
 
 // User routes
 router.post('/apply', [

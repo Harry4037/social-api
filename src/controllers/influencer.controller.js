@@ -205,7 +205,7 @@ const discoverInfluencers = async (req, res, next) => {
       },
     });
 
-    const sessionMap: Record<string, number> = {};
+    const sessionMap = {}; // { influencerId: sessionCount }
     sessionCounts.forEach(s => { sessionMap[s.influencerId] = s.sessionCount; });
 
     const isElite = req.user.subscriptionPlan === 'elite';

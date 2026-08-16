@@ -5,13 +5,13 @@
 const express = require('express');
 const { body, param } = require('express-validator');
 const { validate }    = require('../middleware/middleware');
-// const auth            = require('../middleware/auth');
+const { authenticate } = require('../middleware/auth');
 const strike          = require('../controllers/strike.controller');
 
 const router = express.Router();
 
 // All routes require auth
-// router.use(auth);
+router.use(authenticate);
 
 // Send Strike 2
 router.post('/', [
