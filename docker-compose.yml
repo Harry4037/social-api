@@ -1,7 +1,7 @@
 services:
   mysql:
     image: mysql:8.0
-    container_name: fitconnect-mysql
+    container_name: seshlly-mysql
     restart: unless-stopped
 
     environment:
@@ -11,7 +11,7 @@ services:
       MYSQL_PASSWORD: ${MYSQL_PASSWORD}
 
     volumes:
-      - mysql_data:/var/lib/mysql
+      - seshlly_mysql_data:/var/lib/mysql
 
     healthcheck:
       test:
@@ -31,7 +31,7 @@ services:
       start_period: 30s
 
     networks:
-      - fitconnect-network
+      - seshlly-network
 
 
   app:
@@ -39,7 +39,7 @@ services:
       context: .
       dockerfile: Dockerfile
 
-    container_name: fitconnect-app
+    container_name: seshlly-app
     restart: unless-stopped
 
     env_file:
@@ -53,27 +53,27 @@ services:
       - "127.0.0.1:3000:3000"
 
     volumes:
-      - app_uploads:/app/uploads
-      - app_logs:/app/logs
+      - seshlly_app_uploads:/app/uploads
+      - seshlly_app_logs:/app/logs
 
     networks:
-      - fitconnect-network
+      - seshlly-network
 
   adminer:
     image: adminer:latest
-    container_name: fitconnect-adminer
+    container_name: seshlly-adminer
     restart: unless-stopped
     ports:
       - "127.0.0.1:8080:8080"
     networks:
-      - fitconnect-network
+      - seshlly-network
 
 volumes:
-  mysql_data:
-  app_uploads:
-  app_logs:
+  seshlly_mysql_data:
+  seshlly_app_uploads:
+  seshlly_app_logs:
 
 
 networks:
-  fitconnect-network:
+  seshlly-network:
     driver: bridge
