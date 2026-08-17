@@ -1,23 +1,23 @@
 'use strict';
 require('dotenv').config();
 
-const express = require('express');
-const http = require('http');
-const { Server } = require('socket.io');
-const cors = require('cors');
-const helmet = require('helmet');
+const express     = require('express');
+const http        = require('http');
+const { Server }  = require('socket.io');
+const cors        = require('cors');
+const helmet      = require('helmet');
 const compression = require('compression');
-const morgan = require('morgan');
-const path = require('path');
+const morgan      = require('morgan');
+const path        = require('path');
 
-const logger = require('./config/logger');
-const prisma = require('./config/db');
+const logger      = require('./config/logger');
+const prisma      = require('./config/db');
 const { errorHandler, defaultLimiter } = require('./middleware/middleware');
 const { initSocket } = require('./sockets/socket');
 const { startJobs, stopJobs } = require('./schedulers/scheduler');
 // CMS + Strike + Influencer routes
-const cmsRouter = require('./routes/cms.routes');
-const strikeRouter = require('./routes/strike.routes');
+const cmsRouter        = require('./routes/cms.routes');
+const strikeRouter     = require('./routes/strike.routes');
 const influencerRouter = require('./routes/influencer.routes');
 
 
@@ -26,11 +26,11 @@ const {
   notifRouter, subRouter, tokensRouter, uploadRouter,
   challengeRouter, globalLeaderboardRouter, feedRouter,
 } = require('./routes/index');
-const authRoutes = require('./routes/auth.routes');
+const authRoutes  = require('./routes/auth.routes');
 const adminRoutes = require('./admin/routes/admin.routes');
 
 // ── App ───────────────────────────────────────────────────
-const app = express();
+const app    = express();
 const server = http.createServer(app);
 
 // ── Socket.io ─────────────────────────────────────────────
@@ -40,7 +40,7 @@ const allowedOrigins = process.env.NODE_ENV === 'development'
 
 const io = new Server(server, {
   cors: {
-    origin: allowedOrigins,
+    origin:  allowedOrigins,
     methods: ['GET', 'POST'],
   },
   transports: ['websocket', 'polling'],
@@ -53,7 +53,7 @@ app.use(helmet({
   crossOriginResourcePolicy: { policy: 'cross-origin' },
 }));
 app.use(cors({
-  origin: allowedOrigins,
+  origin:      allowedOrigins,
   credentials: true,
 }));
 app.use(compression());
@@ -80,22 +80,22 @@ app.get('/health', async (_req, res) => {
 const API = `/api/${process.env.API_VERSION || 'v1'}`;
 
 app.use(defaultLimiter);
-app.use(`${API}/auth`, authRoutes);
-app.use(`${API}/users`, userRouter);
-app.use(`${API}/match`, matchRouter);
-app.use(`${API}/sessions`, sessionRouter);
-app.use(`${API}/chat`, chatRouter);
+app.use(`${API}/auth`,          authRoutes);
+app.use(`${API}/users`,         userRouter);
+app.use(`${API}/match`,         matchRouter);
+app.use(`${API}/sessions`,      sessionRouter);
+app.use(`${API}/chat`,          chatRouter);
 app.use(`${API}/notifications`, notifRouter);
-app.use(`${API}/subscriptions`, subRouter);
-app.use(`${API}/tokens`, tokensRouter);
-app.use(`${API}/upload`, uploadRouter);
-app.use(`${API}/challenges`, challengeRouter);
+app.use(`${API}/subscriptions`,      subRouter);
+app.use(`${API}/tokens`,             tokensRouter);
+app.use(`${API}/upload`,             uploadRouter);
+app.use(`${API}/challenges`,         challengeRouter);
 app.use(`${API}/global-leaderboard`, globalLeaderboardRouter);
-app.use(`${API}/feed`, feedRouter);
-app.use('/api/cms', cmsRouter);        // Website CMS panel
-app.use(`${API}/strikes`, strikeRouter);     // Strike 2 — Buddy Strike
-app.use(`${API}/influencer`, influencerRouter); // Influencer system
-app.use(`${API}/admin`, adminRoutes);
+app.use(`${API}/feed`,               feedRouter);
+app.use('/api/cms',                  cmsRouter);        // Website CMS panel
+app.use(`${API}/strikes`,            strikeRouter);     // Strike 2 — Buddy Strike
+app.use(`${API}/influencer`,         influencerRouter); // Influencer system
+app.use(`${API}/admin`,              adminRoutes);
 
 // ── 404 ───────────────────────────────────────────────────
 app.use((_req, res) => res.status(404).json({ success: false, message: 'Route not found' }));
@@ -111,7 +111,7 @@ const startServer = async () => {
     await prisma.$connect();
     logger.info('✅  Database connected');
 
-    server.listen('0.0.0.0', PORT, () => {
+    server.listen(PORT, () => {
       logger.info(`🚀  FitConnect API running on port ${PORT}`);
       logger.info(`    ${API}/auth  |  ${API}/match  |  ${API}/sessions  etc.`);
     });
@@ -135,9 +135,9 @@ const shutdown = async (signal) => {
 };
 
 process.on('SIGTERM', () => shutdown('SIGTERM'));
-process.on('SIGINT', () => shutdown('SIGINT'));
+process.on('SIGINT',  () => shutdown('SIGINT'));
 process.on('unhandledRejection', (reason) => logger.error('Unhandled rejection: ' + reason));
-process.on('uncaughtException', (err) => { logger.error('Uncaught exception: ' + err.message); process.exit(1); });
+process.on('uncaughtException',  (err)    => { logger.error('Uncaught exception: ' + err.message); process.exit(1); });
 
 startServer();
 
