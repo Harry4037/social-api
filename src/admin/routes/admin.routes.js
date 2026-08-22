@@ -8,6 +8,7 @@ const authCtrl = require('../controllers/adminAuth.controller');
 const dashCtrl = require('../controllers/dashboard.controller');
 const usersCtrl = require('../controllers/adminUsers.controller');
 const contentCtrl = require('../controllers/adminContent.controller');
+const cms = require('../controllers/cms.controller');
 
 // ── Public ────────────────────────────────────────────────
 router.post('/auth/login', [
@@ -81,5 +82,43 @@ router.post('/challenges', requireRole('ADMIN'), [
 router.patch('/challenges/:id', requireRole('ADMIN'), [param('id').isUUID()], validate, challengeAdminCtrl.update);
 router.delete('/challenges/:id', requireRole('ADMIN'), [param('id').isUUID()], validate, challengeAdminCtrl.remove);
 router.get('/challenges/:id/entries', requireRole('ADMIN'), [param('id').isUUID()], validate, challengeAdminCtrl.getEntries);
+
+
+router.get('/blog', requireRole('ADMIN'), cms.getArticles);
+router.get('/blog/:id', requireRole('ADMIN'), cms.getArticle);
+router.post('/blog', requireRole('ADMIN'), [
+  body('title').trim().notEmpty(),
+  body('content').notEmpty(),
+  body('category').isIn(['member_story', 'challenge', 'fitness_industry', 'app_update', 'upcoming']),
+  body('status').optional().isIn(['draft', 'published']),
+], validate, cms.createArticle);
+router.put('/blog/:id', requireRole('ADMIN'), [
+  param('id').isUUID(),
+], validate, cms.updateArticle);
+router.delete('/blog/:id', requireRole('ADMIN'), [
+  param('id').isUUID(),
+], validate, cms.deleteArticle);
+
+// ── SEO ───────────────────────────────────────────────────
+router.get('/seo', requireRole('ADMIN'), cms.getSeoPages);
+router.put('/seo/:pageKey', requireRole('ADMIN'), cms.updateSeoPage);
+router.post('/seo/:pageKey/faq', requireRole('ADMIN'), [
+  body('question').notEmpty(),
+  body('answer').notEmpty(),
+], validate, cms.addFaq);
+router.put('/seo/faq/:faqId', requireRole('ADMIN'), cms.updateFaq);
+router.delete('/seo/faq/:faqId', requireRole('ADMIN'), cms.deleteFaq);
+
+// ── WEBSITE CONTENT ───────────────────────────────────────
+router.get('/content', requireRole('ADMIN'), cms.getContent);
+router.put('/content', requireRole('ADMIN'), [
+  body('updates').isObject(),
+], validate, cms.updateContent);
+
+// ── SOCIAL LINKS ──────────────────────────────────────────
+router.get('/social', requireRole('ADMIN'), cms.getSocialLinks);
+router.put('/social', requireRole('ADMIN'), [
+  body('links').isArray(),
+], validate, cms.updateSocialLinks);
 
 module.exports = router;
