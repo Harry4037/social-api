@@ -4,11 +4,11 @@
 //  Auth: JWT + role check middleware
 // ─────────────────────────────────────────────────────────
 const { PrismaClient } = require('@prisma/client');
-const bcrypt           = require('bcryptjs');
-const jwt              = require('jsonwebtoken');
-const { v4: uuid }     = require('uuid');
-const prisma           = new PrismaClient();
-const res_   = require('../../utils/response');
+const bcrypt = require('bcryptjs');
+const jwt = require('jsonwebtoken');
+const { v4: uuid } = require('uuid');
+const prisma = new PrismaClient();
+const res_ = require('../../utils/response');
 
 const JWT_SECRET = process.env.JWT_SECRET || 'change_this_secret';
 
@@ -50,8 +50,8 @@ const cmsAuth = (permKey = null) => async (req, res, next) => {
     if (!token) return res_.error(res, 'Unauthorized', 401);
 
     const decoded = jwt.verify(token, JWT_SECRET);
-    const admin   = await prisma.adminUser.findUnique({
-      where:   { id: decoded.id },
+    const admin = await prisma.adminUser.findUnique({
+      where: { id: decoded.id },
       include: { permissions: true },
     });
 
@@ -87,7 +87,7 @@ const login = async (req, res, next) => {
       return res_.error(res, 'Email and password required', 422);
 
     const admin = await prisma.adminUser.findUnique({
-      where:   { email: email.toLowerCase() },
+      where: { email: email.toLowerCase() },
       include: { permissions: true },
     });
 
@@ -103,7 +103,7 @@ const login = async (req, res, next) => {
     // Update lastActiveAt
     await prisma.adminUser.update({
       where: { id: admin.id },
-      data:  { lastActiveAt: new Date() },
+      data: { lastActiveAt: new Date() },
     });
 
     const token = jwt.sign(
@@ -123,7 +123,7 @@ const login = async (req, res, next) => {
 const getMe = async (req, res, next) => {
   try {
     const admin = await prisma.adminUser.findUnique({
-      where:   { id: req.admin.id },
+      where: { id: req.admin.id },
       include: { permissions: true },
     });
     return res_.success(res, _formatAdmin(admin));
@@ -138,7 +138,7 @@ const getMe = async (req, res, next) => {
 const getTeam = async (req, res, next) => {
   try {
     const members = await prisma.adminUser.findMany({
-      where:   { role: { not: 'super_admin' } },
+      where: { role: { not: 'super_admin' } },
       include: { permissions: true },
       orderBy: { createdAt: 'desc' },
     });
@@ -163,7 +163,7 @@ const inviteMember = async (req, res, next) => {
 
     // Temp password — user sets own via invite link
     const tempPass = Math.random().toString(36).slice(-10);
-    const hash     = await bcrypt.hash(tempPass, 10);
+    const hash = await bcrypt.hash(tempPass, 10);
 
     // Build permissions from preset or custom
     const permData = role !== 'custom' && ROLE_PRESETS[role]
@@ -172,13 +172,13 @@ const inviteMember = async (req, res, next) => {
 
     const admin = await prisma.adminUser.create({
       data: {
-        id:           uuid(),
+        id: uuid(),
         name,
-        email:        email.toLowerCase(),
+        email: email.toLowerCase(),
         passwordHash: hash,
         role,
-        status:       'pending',
-        invitedBy:    req.admin.id,
+        status: 'pending',
+        invitedBy: req.admin.id,
         permissions: { create: { id: uuid(), ...permData } },
       },
       include: { permissions: true },
@@ -207,7 +207,7 @@ const updateMember = async (req, res, next) => {
 
     // Update admin user
     const updateData = {};
-    if (role)   updateData.role   = role;
+    if (role) updateData.role = role;
     if (status) updateData.status = status;
 
     await prisma.adminUser.update({ where: { id }, data: updateData });
@@ -220,14 +220,14 @@ const updateMember = async (req, res, next) => {
         : perms;
 
       await prisma.adminPermission.upsert({
-        where:  { adminId: id },
+        where: { adminId: id },
         update: permData,
         create: { id: uuid(), adminId: id, ...permData },
       });
     }
 
     const updated = await prisma.adminUser.findUnique({
-      where:   { id },
+      where: { id },
       include: { permissions: true },
     });
     return res_.success(res, _formatAdmin(updated), 'Member updated');
@@ -246,7 +246,7 @@ const revokeMember = async (req, res, next) => {
 
     await prisma.adminUser.update({
       where: { id: req.params.id },
-      data:  { status: 'revoked' },
+      data: { status: 'revoked' },
     });
     return res_.success(res, {}, 'Access revoked');
   } catch (e) { next(e); }
@@ -259,31 +259,33 @@ const revokeMember = async (req, res, next) => {
 // GET /cms/blog
 const getArticles = async (req, res, next) => {
   try {
-    const { category, status, page = 1 } = req.query;
-    const take = 20;
-    const skip = (Number(page) - 1) * take;
+    const { category, status, page = 1, limit = 20 } = req.query;
 
     const articles = await prisma.blogArticle.findMany({
       where: {
         ...(category ? { category } : {}),
-        ...(status   ? { status }   : {}),
+        ...(status ? { status } : {}),
       },
       include: { author: { select: { id: true, name: true } } },
       orderBy: { createdAt: 'desc' },
-      take, skip,
+      skip: (Number(page) - 1) * Number(limit),
+      take: Number(limit),
     });
 
     const total = await prisma.blogArticle.count({
       where: {
         ...(category ? { category } : {}),
-        ...(status   ? { status }   : {}),
+        ...(status ? { status } : {}),
       },
     });
 
-    return res_.success(res, {
+    res.json({
       articles: articles.map(_formatArticle),
-      total, page: Number(page),
+      total,
+      page: Number(page),
+      pages: Math.ceil(total / Number(limit)),
     });
+
   } catch (e) { next(e); }
 };
 
@@ -291,7 +293,7 @@ const getArticles = async (req, res, next) => {
 const getArticle = async (req, res, next) => {
   try {
     const article = await prisma.blogArticle.findUnique({
-      where:   { id: req.params.id },
+      where: { id: req.params.id },
       include: { author: { select: { id: true, name: true } } },
     });
     if (!article) return res_.error(res, 'Article not found', 404);
@@ -322,17 +324,17 @@ const createArticle = async (req, res, next) => {
 
     const article = await prisma.blogArticle.create({
       data: {
-        id:          uuid(),
+        id: uuid(),
         title,
-        slug:        finalSlug,
+        slug: finalSlug,
         content,
         category,
         status,
-        excerpt:     excerpt || null,
+        excerpt: excerpt || null,
         featuredImg: featuredImg || null,
-        metaTitle:   metaTitle || null,
-        metaDesc:    metaDesc || null,
-        authorId:    req.admin.id,
+        metaTitle: metaTitle || null,
+        metaDesc: metaDesc || null,
+        authorId: req.admin.id,
         publishedAt: status === 'published' ? new Date() : null,
       },
       include: { author: { select: { id: true, name: true } } },
@@ -358,13 +360,13 @@ const updateArticle = async (req, res, next) => {
     const updated = await prisma.blogArticle.update({
       where: { id: req.params.id },
       data: {
-        ...(title       ? { title }       : {}),
-        ...(content     ? { content }     : {}),
-        ...(category    ? { category }    : {}),
-        ...(excerpt     ? { excerpt }     : {}),
+        ...(title ? { title } : {}),
+        ...(content ? { content } : {}),
+        ...(category ? { category } : {}),
+        ...(excerpt ? { excerpt } : {}),
         ...(featuredImg ? { featuredImg } : {}),
-        ...(metaTitle   ? { metaTitle }   : {}),
-        ...(metaDesc    ? { metaDesc }    : {}),
+        ...(metaTitle ? { metaTitle } : {}),
+        ...(metaDesc ? { metaDesc } : {}),
         ...(status ? {
           status,
           publishedAt: status === 'published' && !article.publishedAt
@@ -405,23 +407,23 @@ const updateSeoPage = async (req, res, next) => {
   try {
     const { metaTitle, metaDesc, canonical, ogImage, hreflang } = req.body;
     const page = await prisma.seoPage.upsert({
-      where:  { pageKey: req.params.pageKey },
+      where: { pageKey: req.params.pageKey },
       update: {
         ...(metaTitle ? { metaTitle } : {}),
-        ...(metaDesc  ? { metaDesc }  : {}),
+        ...(metaDesc ? { metaDesc } : {}),
         ...(canonical ? { canonical } : {}),
-        ...(ogImage   ? { ogImage }   : {}),
-        ...(hreflang  ? { hreflang }  : {}),
+        ...(ogImage ? { ogImage } : {}),
+        ...(hreflang ? { hreflang } : {}),
       },
       create: {
-        id:       uuid(),
-        pageKey:  req.params.pageKey,
-        pageUrl:  `https://seshlly.com/${req.params.pageKey === 'home' ? '' : req.params.pageKey}`,
+        id: uuid(),
+        pageKey: req.params.pageKey,
+        pageUrl: `https://seshlly.com/${req.params.pageKey === 'home' ? '' : req.params.pageKey}`,
         metaTitle: metaTitle || '',
-        metaDesc:  metaDesc  || '',
+        metaDesc: metaDesc || '',
         canonical: canonical || null,
-        ogImage:   ogImage   || null,
-        hreflang:  hreflang  || 'en-IN',
+        ogImage: ogImage || null,
+        hreflang: hreflang || 'en-IN',
       },
       include: { faqs: true },
     });
@@ -455,9 +457,9 @@ const updateFaq = async (req, res, next) => {
     const { question, answer } = req.body;
     const faq = await prisma.seoFaq.update({
       where: { id: req.params.faqId },
-      data:  {
+      data: {
         ...(question ? { question } : {}),
-        ...(answer   ? { answer }   : {}),
+        ...(answer ? { answer } : {}),
       },
     });
     return res_.success(res, faq, 'FAQ updated');
@@ -495,7 +497,7 @@ const updateContent = async (req, res, next) => {
 
     const ops = Object.entries(updates).map(([key, value]) =>
       prisma.websiteContent.upsert({
-        where:  { key },
+        where: { key },
         update: { value: String(value), updatedBy: req.admin.id },
         create: { id: uuid(), key, value: String(value), updatedBy: req.admin.id },
       })
@@ -546,14 +548,14 @@ const getDashboard = async (req, res, next) => {
     ]);
 
     const recentArticles = await prisma.blogArticle.findMany({
-      take:    5,
+      take: 5,
       orderBy: { createdAt: 'desc' },
       include: { author: { select: { id: true, name: true } } },
     });
 
     const recentTeam = await prisma.adminUser.findMany({
-      where:   { role: { not: 'super_admin' } },
-      take:    5,
+      where: { role: { not: 'super_admin' } },
+      take: 5,
       orderBy: { createdAt: 'desc' },
       include: { permissions: true },
     });
@@ -566,38 +568,38 @@ const getDashboard = async (req, res, next) => {
         teamCount,
       },
       recentArticles: recentArticles.map(_formatArticle),
-      recentTeam:     recentTeam.map(_formatAdmin),
+      recentTeam: recentTeam.map(_formatAdmin),
     });
   } catch (e) { next(e); }
 };
 
 // ── Formatters ─────────────────────────────────────────────
 const _formatAdmin = (a) => ({
-  id:           a.id,
-  name:         a.name,
-  email:        a.email,
-  role:         a.role,
-  status:       a.status,
+  id: a.id,
+  name: a.name,
+  email: a.email,
+  role: a.role,
+  status: a.status,
   lastActiveAt: a.lastActiveAt,
-  createdAt:    a.createdAt,
-  permissions:  a.permissions || null,
+  createdAt: a.createdAt,
+  permissions: a.permissions || null,
   // Never return passwordHash
 });
 
 const _formatArticle = (a) => ({
-  id:          a.id,
-  title:       a.title,
-  slug:        a.slug,
-  excerpt:     a.excerpt,
-  content:     a.content,
-  category:    a.category,
-  status:      a.status,
+  id: a.id,
+  title: a.title,
+  slug: a.slug,
+  excerpt: a.excerpt,
+  content: a.content,
+  category: a.category,
+  status: a.status,
   featuredImg: a.featuredImg,
-  metaTitle:   a.metaTitle,
-  metaDesc:    a.metaDesc,
+  metaTitle: a.metaTitle,
+  metaDesc: a.metaDesc,
   publishedAt: a.publishedAt,
-  createdAt:   a.createdAt,
-  author:      a.author,
+  createdAt: a.createdAt,
+  author: a.author,
 });
 
 module.exports = {
