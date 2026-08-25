@@ -57,7 +57,7 @@ const getChats = async (req, res, next) => {
         : false;
       return {
         id:           c.id,
-        matchId:     chat.matchId,
+        matchId:     c.matchId,
         buddyId:      buddy.id,
         buddyName:    `${buddy.firstName} ${buddy.lastName}`,
         buddyAvatar:  buddy.avatarUrl,
