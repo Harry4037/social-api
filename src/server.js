@@ -16,7 +16,7 @@ const { errorHandler, defaultLimiter } = require('./middleware/middleware');
 const { initSocket } = require('./sockets/socket');
 const { startJobs, stopJobs } = require('./schedulers/scheduler');
 // CMS + Strike + Influencer routes
-// const cmsRouter        = require('./routes/cms.routes');
+const cmsRouter        = require('./routes/cms.routes');
 const strikeRouter     = require('./routes/strike.routes');
 const influencerRouter = require('./routes/influencer.routes');
 
@@ -92,7 +92,7 @@ app.use(`${API}/upload`,             uploadRouter);
 app.use(`${API}/challenges`,         challengeRouter);
 app.use(`${API}/global-leaderboard`, globalLeaderboardRouter);
 app.use(`${API}/feed`,               feedRouter);
-// app.use(`${API}/cms`,                  cmsRouter);        // Website CMS panel
+app.use(`${API}/cms`,                  cmsRouter);        // Website CMS panel
 app.use(`${API}/strikes`,            strikeRouter);     // Strike 2 — Buddy Strike
 app.use(`${API}/influencer`,         influencerRouter); // Influencer system
 app.use(`${API}/admin`,              adminRoutes);
