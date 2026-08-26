@@ -3,6 +3,22 @@ const { PrismaClient } = require('@prisma/client');
 const prisma = new PrismaClient();
 const res_ = require('../utils/response');
 
+const _formatArticle = (a) => ({
+  id: a.id,
+  title: a.title,
+  slug: a.slug,
+  excerpt: a.excerpt,
+  content: a.content,
+  category: a.category,
+  status: a.status,
+  featuredImg: a.featuredImg,
+  metaTitle: a.metaTitle,
+  metaDesc: a.metaDesc,
+  publishedAt: a.publishedAt,
+  createdAt: a.createdAt,
+  author: a.author,
+});
+
 const getSeoPages = async (req, res, next) => {
   try {
     const pages = await prisma.seoPage.findMany({
