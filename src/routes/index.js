@@ -159,8 +159,16 @@ feedRouter.post('/', authenticate, [
   body('stationTitle').notEmpty(),
 ], validate, challengeLeaderboardCtrl.postToFeed);
 
+// ── Flash Streak routes ──────────────────────────────────
+const flashCtrl   = require('../controllers/flash_streak.controller');
+const flashRouter = express.Router();
+flashRouter.post('/send',           authenticate, flashCtrl.recordFlashSent);
+flashRouter.get('/streaks',         authenticate, flashCtrl.getMyStreaks);
+flashRouter.get('/streak/:buddyId', authenticate, flashCtrl.getPairStreak);
+
 module.exports = {
   userRouter, matchRouter, sessionRouter, chatRouter,
   notifRouter, subRouter, tokensRouter, uploadRouter,
   challengeRouter, globalLeaderboardRouter, feedRouter,
+  flashRouter,
 };

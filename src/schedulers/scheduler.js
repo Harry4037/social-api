@@ -158,7 +158,17 @@ const startJobs = () => {
     } catch (e) { logger.error('[CRON] streakWarnings: ' + e.message); }
   });
 
-  // 8. Auto delete chat messages after 24 hours — every hour
+  // 8. Break expired Flash streaks — every hour
+  cron.schedule('0 * * * *', async () => {
+    try {
+      const flashCtrl = require('./controllers/flash_streak.controller');
+      const r = await flashCtrl.breakExpiredStreaks();
+      if (r?.broken > 0)
+        logger.info(`[CRON] flashStreakBreak: ${r.broken} streaks reset`);
+    } catch (e) { logger.error('[CRON] flashStreakBreak: ' + e.message); }
+  });
+
+  // 9. Auto delete chat messages after 24 hours — every hour
   // Sirf regular text messages delete honge
   // Session invites, strike cards, proof cards — safe rahenge
   cron.schedule('0 * * * *', async () => {
