@@ -50,8 +50,29 @@ const discover = async (req, res, next) => {
           : false;
         return { ...u, compatibilityScore, distanceKm, isOnline };
       })
-      .filter(u => u.distanceKm === null || u.distanceKm <= Number(maxDistance))
-      .sort((a, b) => b.compatibilityScore - a.compatibilityScore)
+      .filter(u => {
+        // Hard cap — 10km max
+        if (u.distanceKm !== null && u.distanceKm > 10) return false;
+        // maxDistance from query (but never more than 10)
+        const radius = Math.min(Number(maxDistance), 10);
+        return u.distanceKm === null || u.distanceKm <= radius;
+      })
+      .sort((a, b) => {
+        // 1st priority — same primary activity as logged in user
+        const myActivity = me.primaryActivity;
+        const aIsSame = a.primaryActivity === myActivity ? 0 : 1;
+        const bIsSame = b.primaryActivity === myActivity ? 0 : 1;
+        if (aIsSame !== bIsSame) return aIsSame - bIsSame;
+
+        // 2nd priority — compatibility score
+        if (b.compatibilityScore !== a.compatibilityScore)
+          return b.compatibilityScore - a.compatibilityScore;
+
+        // 3rd priority — distance (closer first)
+        const aDist = a.distanceKm ?? 999;
+        const bDist = b.distanceKm ?? 999;
+        return aDist - bDist;
+      })
       .map(u => formatBuddyProfile(u, {
         compatibilityScore: u.compatibilityScore,
         distanceKm: u.distanceKm,

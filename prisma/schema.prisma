@@ -151,6 +151,7 @@ model User {
   influencerApplication InfluencerApplication?  @relation("UserApplication")
   influencerSessions   InfluencerSession[]      @relation("InfluencerSessions")
   fanSessions          InfluencerSession[]      @relation("FanSessions")
+  photos               UserPhoto[]              @relation("UserPhotos")
 
   @@index([email])
   @@index([city])
@@ -159,6 +160,18 @@ model User {
   @@index([primaryActivity])
   @@index([isInfluencer])
   @@map("users")
+}
+
+model UserPhoto {
+  id        String   @id @default(uuid())
+  userId    String
+  url       String   @db.VarChar(500)
+  order     Int      @default(0)
+  createdAt DateTime @default(now())
+
+  user User @relation("UserPhotos", fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("user_photos")
 }
 
 // ─────────────────────────────────────────────────────────
