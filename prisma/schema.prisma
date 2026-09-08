@@ -25,9 +25,9 @@ enum SubscriptionPlan {
 }
 
 enum SessionStatus {
-  scheduled     // session booked, upcoming
-  completed     // proof uploaded + buddy confirmed
-  missed        // 3hr window passed, no proof uploaded
+  scheduled // session booked, upcoming
+  completed // proof uploaded + buddy confirmed
+  missed // 3hr window passed, no proof uploaded
 }
 
 enum MessageType {
@@ -66,92 +66,101 @@ enum UploadFolder {
 //  USER
 // ─────────────────────────────────────────────────────────
 model User {
-  id                 String           @id @default(uuid())
-  email              String           @unique
-  passwordHash       String
-  firstName          String
-  lastName           String
-  username           String?          @unique
-  phone              String?
-  avatarUrl          String?          @db.Text
-  bio                String?          @db.Text
-  country            String?
-  city               String?
-  latitude           Decimal?         @db.Decimal(10,8)
-  longitude          Decimal?         @db.Decimal(11,8)
+  id           String   @id @default(uuid())
+  email        String   @unique
+  passwordHash String
+  firstName    String
+  lastName     String
+  username     String?  @unique
+  phone        String?
+  avatarUrl    String?  @db.Text
+  bio          String?  @db.Text
+  country      String?
+  city         String?
+  latitude     Decimal? @db.Decimal(10, 8)
+  longitude    Decimal? @db.Decimal(11, 8)
 
   // Status
-  status             UserStatus       @default(ACTIVE)
-  emailVerified      Boolean          @default(false)
-  isBanned           Boolean          @default(false)
-  loginCount         Int              @default(0)
-  lastLoginAt        DateTime?
-  lastActiveAt       DateTime?
+  status        UserStatus @default(ACTIVE)
+  emailVerified Boolean    @default(false)
+  isBanned      Boolean    @default(false)
+  loginCount    Int        @default(0)
+  lastLoginAt   DateTime?
+  lastActiveAt  DateTime?
 
   // Fitness profile
-  gender             String?
-  walkthroughSeen    Boolean          @default(false)
-  primaryActivity    String?
-  activities         Json             @default("[]")
-  experienceLevel    String?
-  goals              Json             @default("[]")
-  primaryGym         String?
-  searchRadius       Int              @default(10)
+  gender          String?
+  walkthroughSeen Boolean @default(false)
+  primaryActivity String?
+  activities      Json    @default("[]")
+  experienceLevel String?
+  goals           Json    @default("[]")
+  primaryGym      String?
+  searchRadius    Int     @default(10)
 
   // Gamification
-  xpTotal            Int              @default(0)
-  weeklyXp           Int              @default(0)
-  monthlyXp          Int              @default(0)
-  level              Int              @default(1)
-  chatTokens         Int              @default(20)
-  trustScore         Decimal          @default(30.00) @db.Decimal(5,2)
-  idVerified         Boolean          @default(false)
+  xpTotal    Int     @default(0)
+  weeklyXp   Int     @default(0)
+  monthlyXp  Int     @default(0)
+  level      Int     @default(1)
+  chatTokens Int     @default(20)
+  trustScore Decimal @default(30.00) @db.Decimal(5, 2)
+  idVerified Boolean @default(false)
 
   // Influencer
-  isInfluencer            Boolean   @default(false)
-  instagramHandle         String?                     // All users can add (optional)
-  instagramFollowers      Int?                        // Verified followers (admin set)
-  influencerBio           String?   @db.Text          // Fitness niche description
-  instagramVerifiedAt     DateTime?                   // When IG was verified by admin
-  influencerAppliedAt     DateTime?                   // When they applied
-  influencerSessionLimit  Int       @default(3)        // Max sessions/month fans can book
+  isInfluencer           Boolean   @default(false)
+  instagramHandle        String? // All users can add (optional)
+  instagramFollowers     Int? // Verified followers (admin set)
+  influencerBio          String?   @db.Text // Fitness niche description
+  instagramVerifiedAt    DateTime? // When IG was verified by admin
+  influencerAppliedAt    DateTime? // When they applied
+  influencerSessionLimit Int       @default(3) // Max sessions/month fans can book
 
   // Subscription
   subscriptionPlan   SubscriptionPlan @default(free)
   subscriptionExpiry DateTime?
 
   // Timestamps
-  createdAt          DateTime         @default(now())
-  updatedAt          DateTime         @updatedAt
-  deletedAt          DateTime?
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
 
   // Relations
-  refreshTokens        RefreshToken[]
-  swipesGiven          Swipe[]            @relation("SwiperSwipes")
-  swipesReceived       Swipe[]            @relation("SwipedSwipes")
-  matchesA             Match[]            @relation("MatchUserA")
-  matchesB             Match[]            @relation("MatchUserB")
-  sessionsAsUser       WorkoutSession[]   @relation("SessionUser")
-  sessionsAsBuddy      WorkoutSession[]   @relation("SessionBuddy")
-  messagesSent         Message[]
-  chatsA               Chat[]             @relation("ChatUserA")
-  chatsB               Chat[]             @relation("ChatUserB")
-  notifications        Notification[]
-  orders               Order[]
-  uploads              Upload[]
-  dailySwipes          DailySwipe[]
-  xpEvents             XpEvent[]
-  challengeEntries     ChallengeEntry[]   @relation("UserChallenges")
-  buddyChallenges      ChallengeEntry[]   @relation("BuddyChallenges")
-  challengeFeedPosts   ChallengeFeedPost[] @relation("UserFeedPosts")
-  sessionParticipants  SessionParticipant[] @relation("SessionParticipants")
-  chatMemberships      ChatMember[]        @relation("ChatMembers")
-  strikesSent          BuddyStrike[]       @relation("StrikeSender")
-  strikesReceived      BuddyStrike[]       @relation("StrikeReceiver")
-  influencerApplication InfluencerApplication?  @relation("UserApplication")
-  influencerSessions   InfluencerSession[]      @relation("InfluencerSessions")
-  fanSessions          InfluencerSession[]      @relation("FanSessions")
-  photos               UserPhoto[]              @relation("UserPhotos")
+  refreshTokens         RefreshToken[]
+  swipesGiven           Swipe[]                @relation("SwiperSwipes")
+  swipesReceived        Swipe[]                @relation("SwipedSwipes")
+  matchesA              Match[]                @relation("MatchUserA")
+  matchesB              Match[]                @relation("MatchUserB")
+  sessionsAsUser        WorkoutSession[]       @relation("SessionUser")
+  sessionsAsBuddy       WorkoutSession[]       @relation("SessionBuddy")
+  messagesSent          Message[]
+  chatsA                Chat[]                 @relation("ChatUserA")
+  chatsB                Chat[]                 @relation("ChatUserB")
+  notifications         Notification[]
+  orders                Order[]
+  uploads               Upload[]
+  dailySwipes           DailySwipe[]
+  xpEvents              XpEvent[]
+  challengeEntries      ChallengeEntry[]       @relation("UserChallenges")
+  buddyChallenges       ChallengeEntry[]       @relation("BuddyChallenges")
+  challengeFeedPosts    ChallengeFeedPost[]    @relation("UserFeedPosts")
+  sessionParticipants   SessionParticipant[]   @relation("SessionParticipants")
+  chatMemberships       ChatMember[]           @relation("ChatMembers")
+  strikesSent           BuddyStrike[]          @relation("StrikeSender")
+  strikesReceived       BuddyStrike[]          @relation("StrikeReceiver")
+  influencerApplication InfluencerApplication? @relation("UserApplication")
+  influencerSessions    InfluencerSession[]    @relation("InfluencerSessions")
+  fanSessions           InfluencerSession[]    @relation("FanSessions")
+
+  // New feature relations
+  photos               UserPhoto[]           @relation("UserPhotos")
+  flashStreaksAsUserA  FlashStreak[]         @relation("FlashStreakUserA")
+  flashStreaksAsUserB  FlashStreak[]         @relation("FlashStreakUserB")
+  referralsMade        Referral[]            @relation("ReferralsMade")
+  referralsReceived    Referral[]            @relation("ReferralsReceived")
+  verificationRequests VerificationRequest[] @relation("VerificationRequests")
+  waitlistEntries      WaitlistEntry[]
+  fcmToken             String?
 
   @@index([email])
   @@index([city])
@@ -160,18 +169,6 @@ model User {
   @@index([primaryActivity])
   @@index([isInfluencer])
   @@map("users")
-}
-
-model UserPhoto {
-  id        String   @id @default(uuid())
-  userId    String
-  url       String   @db.VarChar(500)
-  order     Int      @default(0)
-  createdAt DateTime @default(now())
-
-  user User @relation("UserPhotos", fields: [userId], references: [id], onDelete: Cascade)
-
-  @@map("user_photos")
 }
 
 // ─────────────────────────────────────────────────────────
@@ -185,7 +182,7 @@ model RefreshToken {
   expiresAt DateTime
   createdAt DateTime @default(now())
 
-  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId])
   @@map("refresh_tokens")
@@ -195,14 +192,14 @@ model RefreshToken {
 //  MATCHING
 // ─────────────────────────────────────────────────────────
 model Swipe {
-  id         String      @id @default(uuid())
-  swiperId   String
-  swipedId   String
-  action     SwipeAction
-  createdAt  DateTime    @default(now())
+  id        String      @id @default(uuid())
+  swiperId  String
+  swipedId  String
+  action    SwipeAction
+  createdAt DateTime    @default(now())
 
-  swiper     User        @relation("SwiperSwipes", fields: [swiperId], references: [id], onDelete: Cascade)
-  swiped     User        @relation("SwipedSwipes", fields: [swipedId], references: [id], onDelete: Cascade)
+  swiper User @relation("SwiperSwipes", fields: [swiperId], references: [id], onDelete: Cascade)
+  swiped User @relation("SwipedSwipes", fields: [swipedId], references: [id], onDelete: Cascade)
 
   @@unique([swiperId, swipedId])
   @@index([swiperId])
@@ -211,19 +208,19 @@ model Swipe {
 }
 
 model Match {
-  id                 String    @id @default(uuid())
-  userAId            String
-  userBId            String
-  status             String    @default("active") // active | unmatched
-  buddyStrikeStreak  Int       @default(0)         // Strike 2 streak count
-  strikeCount        Int       @default(0)         // Total strikes sent
-  lastStrikeAt       DateTime?                     // Last strike sent timestamp
-  createdAt          DateTime  @default(now())
+  id                String    @id @default(uuid())
+  userAId           String
+  userBId           String
+  status            String    @default("active") // active | unmatched
+  buddyStrikeStreak Int       @default(0) // Strike 2 streak count
+  strikeCount       Int       @default(0) // Total strikes sent
+  lastStrikeAt      DateTime? // Last strike sent timestamp
+  createdAt         DateTime  @default(now())
 
-  userA     User         @relation("MatchUserA", fields: [userAId], references: [id], onDelete: Cascade)
-  userB     User         @relation("MatchUserB", fields: [userBId], references: [id], onDelete: Cascade)
-  chat      Chat?
-  strikes   BuddyStrike[]
+  userA   User          @relation("MatchUserA", fields: [userAId], references: [id], onDelete: Cascade)
+  userB   User          @relation("MatchUserB", fields: [userBId], references: [id], onDelete: Cascade)
+  chat    Chat?
+  strikes BuddyStrike[]
 
   @@unique([userAId, userBId])
   @@index([userAId])
@@ -237,12 +234,12 @@ model Match {
 model WorkoutSession {
   id               String        @id @default(uuid())
   userId           String
-  buddyId          String?       // kept for 2-person sessions
+  buddyId          String? // kept for 2-person sessions
   activity         String
   gymName          String?
   scheduledAt      DateTime
-  durationMins     Int           @default(60)  // 45 | 60 | 90 | 120
-  endTime          DateTime      // scheduledAt + durationMins
+  durationMins     Int           @default(60) // 45 | 60 | 90 | 120
+  endTime          DateTime // scheduledAt + durationMins
   status           SessionStatus @default(scheduled)
   proofImageUrl    String?       @db.Text
   proofVideoUrl    String?       @db.Text
@@ -251,15 +248,15 @@ model WorkoutSession {
   tokensDeducted   Int?
   notes            String?       @db.Text
   incompleteReason String?
-  challengeId      String?       // linked challenge if any
-  chatId           String?       // group chat if group session
+  challengeId      String? // linked challenge if any
+  chatId           String? // group chat if group session
   createdAt        DateTime      @default(now())
   updatedAt        DateTime      @updatedAt
 
-  user             User          @relation("SessionUser",  fields: [userId],  references: [id], onDelete: Cascade)
-  buddy            User?         @relation("SessionBuddy", fields: [buddyId], references: [id], onDelete: SetNull)
-  challenge        Challenge?    @relation("WorkoutChallenge", fields: [challengeId], references: [id], onDelete: SetNull)
-  participants     SessionParticipant[]
+  user         User                 @relation("SessionUser", fields: [userId], references: [id], onDelete: Cascade)
+  buddy        User?                @relation("SessionBuddy", fields: [buddyId], references: [id], onDelete: SetNull)
+  challenge    Challenge?           @relation("WorkoutChallenge", fields: [challengeId], references: [id], onDelete: SetNull)
+  participants SessionParticipant[]
 
   @@index([userId])
   @@index([buddyId])
@@ -272,15 +269,15 @@ model WorkoutSession {
 
 // Group session participants (up to 10)
 model SessionParticipant {
-  id          String   @id @default(uuid())
+  id          String    @id @default(uuid())
   sessionId   String
   userId      String
-  status      String   @default("pending") // pending | confirmed | declined
+  status      String    @default("pending") // pending | confirmed | declined
   respondedAt DateTime?
-  createdAt   DateTime @default(now())
+  createdAt   DateTime  @default(now())
 
-  session     WorkoutSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
-  user        User           @relation("SessionParticipants", fields: [userId], references: [id], onDelete: Cascade)
+  session WorkoutSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  user    User           @relation("SessionParticipants", fields: [userId], references: [id], onDelete: Cascade)
 
   @@unique([sessionId, userId])
   @@index([sessionId])
@@ -293,9 +290,9 @@ model SessionParticipant {
 // ─────────────────────────────────────────────────────────
 model Chat {
   id            String    @id @default(uuid())
-  matchId       String?   @unique   // null for group chats
-  userAId       String?             // null for group chats
-  userBId       String?             // null for group chats
+  matchId       String?   @unique // null for group chats
+  userAId       String? // null for group chats
+  userBId       String? // null for group chats
   isGroup       Boolean   @default(false)
   groupName     String?
   lastMessage   String?   @db.Text
@@ -303,11 +300,11 @@ model Chat {
   createdAt     DateTime  @default(now())
   updatedAt     DateTime  @updatedAt
 
-  match         Match?    @relation(fields: [matchId],  references: [id], onDelete: Cascade)
-  userA         User?     @relation("ChatUserA", fields: [userAId], references: [id], onDelete: Cascade)
-  userB         User?     @relation("ChatUserB", fields: [userBId], references: [id], onDelete: Cascade)
-  messages      Message[]
-  members       ChatMember[]
+  match    Match?       @relation(fields: [matchId], references: [id], onDelete: Cascade)
+  userA    User?        @relation("ChatUserA", fields: [userAId], references: [id], onDelete: Cascade)
+  userB    User?        @relation("ChatUserB", fields: [userBId], references: [id], onDelete: Cascade)
+  messages Message[]
+  members  ChatMember[]
 
   @@index([userAId])
   @@index([userBId])
@@ -323,8 +320,8 @@ model ChatMember {
   joinedAt DateTime @default(now())
   isAdmin  Boolean  @default(false)
 
-  chat     Chat     @relation(fields: [chatId], references: [id], onDelete: Cascade)
-  user     User     @relation("ChatMembers", fields: [userId],  references: [id], onDelete: Cascade)
+  chat Chat @relation(fields: [chatId], references: [id], onDelete: Cascade)
+  user User @relation("ChatMembers", fields: [userId], references: [id], onDelete: Cascade)
 
   @@unique([chatId, userId])
   @@index([chatId])
@@ -333,18 +330,18 @@ model ChatMember {
 }
 
 model Message {
-  id         String      @id @default(uuid())
-  chatId     String
-  senderId   String
-  content    String      @db.Text
-  type       MessageType @default(text)
-  isRead     Boolean     @default(false)
-  readAt     DateTime?
-  metadata   Json?
-  createdAt  DateTime    @default(now())
+  id        String      @id @default(uuid())
+  chatId    String
+  senderId  String
+  content   String      @db.Text
+  type      MessageType @default(text)
+  isRead    Boolean     @default(false)
+  readAt    DateTime?
+  metadata  Json?
+  createdAt DateTime    @default(now())
 
-  chat       Chat        @relation(fields: [chatId],   references: [id], onDelete: Cascade)
-  sender     User        @relation(fields: [senderId], references: [id], onDelete: Cascade)
+  chat   Chat @relation(fields: [chatId], references: [id], onDelete: Cascade)
+  sender User @relation(fields: [senderId], references: [id], onDelete: Cascade)
 
   @@index([chatId])
   @@index([senderId])
@@ -367,7 +364,7 @@ model Notification {
   data      Json?
   createdAt DateTime         @default(now())
 
-  user      User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId])
   @@index([isRead])
@@ -391,28 +388,28 @@ model SubscriptionPlanConfig {
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
-  orders      Order[]
+  orders Order[]
 
   @@map("subscription_plans")
 }
 
 model Order {
-  id                  String   @id @default(uuid())
-  userId              String
-  planId              String?
-  razorpayOrderId     String   @unique
-  razorpayPaymentId   String?
-  razorpaySignature   String?
-  amount              Int
-  currency            String   @default("INR")
-  status              String   @default("created")
-  type                String   @default("subscription")
-  tokenPack           Int?
-  createdAt           DateTime @default(now())
-  updatedAt           DateTime @updatedAt
+  id                String   @id @default(uuid())
+  userId            String
+  planId            String?
+  razorpayOrderId   String   @unique
+  razorpayPaymentId String?
+  razorpaySignature String?
+  amount            Int
+  currency          String   @default("INR")
+  status            String   @default("created")
+  type              String   @default("subscription")
+  tokenPack         Int?
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
 
-  user                User                    @relation(fields: [userId], references: [id], onDelete: Cascade)
-  plan                SubscriptionPlanConfig? @relation(fields: [planId],  references: [id])
+  user User                    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  plan SubscriptionPlanConfig? @relation(fields: [planId], references: [id])
 
   @@index([userId])
   @@index([razorpayOrderId])
@@ -432,7 +429,7 @@ model Upload {
   sizeBytes Int?
   createdAt DateTime     @default(now())
 
-  user      User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId])
   @@map("uploads")
@@ -442,12 +439,12 @@ model Upload {
 //  GAMIFICATION
 // ─────────────────────────────────────────────────────────
 model DailySwipe {
-  id        String   @id @default(uuid())
-  userId    String
-  date      String
-  count     Int      @default(0)
+  id     String @id @default(uuid())
+  userId String
+  date   String
+  count  Int    @default(0)
 
-  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@unique([userId, date])
   @@index([userId])
@@ -462,7 +459,7 @@ model XpEvent {
   metadata  Json?
   createdAt DateTime @default(now())
 
-  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId])
   @@map("xp_events")
@@ -477,35 +474,35 @@ model AdminUser {
   passwordHash String
   firstName    String?
   lastName     String?
-  name         String?                          // CMS display name
-  role         String    @default("custom")     // super_admin | blog_editor | seo_manager | website_manager | custom | SUPPORT | MODERATOR
+  name         String? // CMS display name
+  role         String    @default("custom") // super_admin | blog_editor | seo_manager | website_manager | custom | SUPPORT | MODERATOR
   avatarUrl    String?
   isActive     Boolean   @default(true)
-  status       String    @default("pending")    // active | pending | revoked (CMS)
+  status       String    @default("pending") // active | pending | revoked (CMS)
   invitedBy    String?
   lastLoginAt  DateTime?
   lastActiveAt DateTime?
   createdAt    DateTime  @default(now())
   updatedAt    DateTime  @updatedAt
 
-  auditLogs    AuditLog[]
-  permissions  AdminPermission?
-  articles     BlogArticle[]    @relation("BlogAuthor")
+  auditLogs   AuditLog[]
+  permissions AdminPermission?
+  articles    BlogArticle[]    @relation("BlogAuthor")
 
   @@map("admin_users")
 }
 
 model AuditLog {
-  id          String    @id @default(uuid())
-  adminId     String
-  action      String
-  entityType  String
-  entityId    String?
-  details     Json?
-  ip          String?
-  createdAt   DateTime  @default(now())
+  id         String   @id @default(uuid())
+  adminId    String
+  action     String
+  entityType String
+  entityId   String?
+  details    Json?
+  ip         String?
+  createdAt  DateTime @default(now())
 
-  admin       AdminUser @relation(fields: [adminId], references: [id], onDelete: Cascade)
+  admin AdminUser @relation(fields: [adminId], references: [id], onDelete: Cascade)
 
   @@index([adminId])
   @@index([action])
@@ -517,28 +514,28 @@ model AuditLog {
 //  CHALLENGES (V2)
 // ─────────────────────────────────────────────────────────
 model Challenge {
-  id                  String   @id @default(uuid())
-  title               String
-  description         String   @db.Text
-  type                String
-  tier                Int      @default(1)
-  activityType        String   @default("any")
-  activityTag         String   @default("Any activity")
-  environment         String   @default("any")
-  cityId              String?
-  startAt             DateTime
-  endAt               DateTime
-  xpPool              Int
-  entryLevelRequired  Int      @default(1)
-  trustRequired       Int      @default(0)
-  maxParticipants     Int?
-  isActive            Boolean  @default(true)
-  createdAt           DateTime @default(now())
-  updatedAt           DateTime @updatedAt
+  id                 String   @id @default(uuid())
+  title              String
+  description        String   @db.Text
+  type               String
+  tier               Int      @default(1)
+  activityType       String   @default("any")
+  activityTag        String   @default("Any activity")
+  environment        String   @default("any")
+  cityId             String?
+  startAt            DateTime
+  endAt              DateTime
+  xpPool             Int
+  entryLevelRequired Int      @default(1)
+  trustRequired      Int      @default(0)
+  maxParticipants    Int?
+  isActive           Boolean  @default(true)
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
 
   stations  ChallengeStation[]
-  entries   ChallengeEntry[]  @relation("EntryChallenge")
-  sessions  WorkoutSession[]  @relation("WorkoutChallenge")
+  entries   ChallengeEntry[]    @relation("EntryChallenge")
+  sessions  WorkoutSession[]    @relation("WorkoutChallenge")
   feedPosts ChallengeFeedPost[]
 
   @@index([tier])
@@ -555,14 +552,14 @@ model ChallengeStation {
   description      String  @db.Text
   exerciseName     String  @default("")
   setsReps         String  @default("")
-  proofInstruction String  @default("Upload a photo or video of your workout")
+  proofInstruction String? @db.Text
   verifyType       String  @default("count")
   targetValue      Int     @default(1)
   buddyRequired    Boolean @default(false)
   xpReward         Int
 
-  challenge    Challenge           @relation(fields: [challengeId], references: [id], onDelete: Cascade)
-  completions  StationCompletion[]
+  challenge   Challenge           @relation(fields: [challengeId], references: [id], onDelete: Cascade)
+  completions StationCompletion[]
 
   @@index([challengeId])
   @@map("challenge_stations")
@@ -583,8 +580,8 @@ model ChallengeEntry {
   completedAt    DateTime?
 
   challenge   Challenge           @relation("EntryChallenge", fields: [challengeId], references: [id], onDelete: Cascade)
-  user        User                @relation("UserChallenges",  fields: [userId],   references: [id], onDelete: Cascade)
-  buddy       User?               @relation("BuddyChallenges", fields: [buddyId],  references: [id], onDelete: SetNull)
+  user        User                @relation("UserChallenges", fields: [userId], references: [id], onDelete: Cascade)
+  buddy       User?               @relation("BuddyChallenges", fields: [buddyId], references: [id], onDelete: SetNull)
   completions StationCompletion[]
 
   @@index([challengeId])
@@ -594,16 +591,16 @@ model ChallengeEntry {
 }
 
 model StationCompletion {
-  id             String   @id @default(uuid())
-  entryId        String
-  stationId      String
-  stationNum     Int
-  completedAt    DateTime @default(now())
-  xpAwarded      Int
-  progressValue  Int      @default(0)
-  isCollab       Boolean  @default(false)
+  id            String   @id @default(uuid())
+  entryId       String
+  stationId     String
+  stationNum    Int
+  completedAt   DateTime @default(now())
+  xpAwarded     Int
+  progressValue Int      @default(0)
+  isCollab      Boolean  @default(false)
 
-  entry   ChallengeEntry   @relation(fields: [entryId],   references: [id], onDelete: Cascade)
+  entry   ChallengeEntry   @relation(fields: [entryId], references: [id], onDelete: Cascade)
   station ChallengeStation @relation(fields: [stationId], references: [id], onDelete: Cascade)
 
   @@index([entryId])
@@ -644,22 +641,22 @@ model ChallengeFeedPost {
 
 // Blog articles
 model BlogArticle {
-  id          String   @id @default(uuid())
+  id          String    @id @default(uuid())
   title       String
-  slug        String   @unique
-  excerpt     String?  @db.Text
-  content     String   @db.Text
-  category    String   // member_story | challenge | fitness_industry | app_update | upcoming
-  status      String   @default("draft") // draft | published
+  slug        String    @unique
+  excerpt     String?   @db.Text
+  content     String    @db.Text
+  category    String // member_story | challenge | fitness_industry | app_update | upcoming
+  status      String    @default("draft") // draft | published
   authorId    String
   featuredImg String?
   metaTitle   String?
-  metaDesc    String?  @db.Text
+  metaDesc    String?   @db.Text
   publishedAt DateTime?
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
 
-  author      AdminUser @relation("BlogAuthor", fields: [authorId], references: [id], onDelete: Cascade)
+  author AdminUser @relation("BlogAuthor", fields: [authorId], references: [id], onDelete: Cascade)
 
   @@index([slug])
   @@index([status])
@@ -669,17 +666,17 @@ model BlogArticle {
 
 // SEO settings per page
 model SeoPage {
-  id          String   @id @default(uuid())
-  pageKey     String   @unique // home | blog | download | blog_post
-  pageUrl     String
-  metaTitle   String
-  metaDesc    String   @db.Text
-  canonical   String?
-  ogImage     String?
-  hreflang    String   @default("en-IN")
-  updatedAt   DateTime @updatedAt
+  id        String   @id @default(uuid())
+  pageKey   String   @unique // home | blog | download | blog_post
+  pageUrl   String
+  metaTitle String
+  metaDesc  String   @db.Text
+  canonical String?
+  ogImage   String?
+  hreflang  String   @default("en-IN")
+  updatedAt DateTime @updatedAt
 
-  faqs        SeoFaq[]
+  faqs SeoFaq[]
 
   @@map("seo_pages")
 }
@@ -693,7 +690,7 @@ model SeoFaq {
   order     Int      @default(0)
   createdAt DateTime @default(now())
 
-  page      SeoPage  @relation(fields: [pageId], references: [id], onDelete: Cascade)
+  page SeoPage @relation(fields: [pageId], references: [id], onDelete: Cascade)
 
   @@index([pageId])
   @@map("seo_faqs")
@@ -721,39 +718,38 @@ model SocialLink {
   @@map("social_links")
 }
 
-
 // Per-user granular permissions
 model AdminPermission {
-  id              String   @id @default(uuid())
-  adminId         String   @unique
+  id               String  @id @default(uuid())
+  adminId          String  @unique
   // Blog
-  blogView        Boolean  @default(false)
-  blogCreate      Boolean  @default(false)
-  blogEdit        Boolean  @default(false)
-  blogDelete      Boolean  @default(false)
-  blogPublish     Boolean  @default(false)
+  blogView         Boolean @default(false)
+  blogCreate       Boolean @default(false)
+  blogEdit         Boolean @default(false)
+  blogDelete       Boolean @default(false)
+  blogPublish      Boolean @default(false)
   // SEO
-  seoView         Boolean  @default(false)
-  seoEditMeta     Boolean  @default(false)
-  seoEditFaq      Boolean  @default(false)
-  seoSitemap      Boolean  @default(false)
+  seoView          Boolean @default(false)
+  seoEditMeta      Boolean @default(false)
+  seoEditFaq       Boolean @default(false)
+  seoSitemap       Boolean @default(false)
   // Website Content
-  contentView     Boolean  @default(false)
-  contentHero     Boolean  @default(false)
-  contentStats    Boolean  @default(false)
-  contentTestimon Boolean  @default(false)
+  contentView      Boolean @default(false)
+  contentHero      Boolean @default(false)
+  contentStats     Boolean @default(false)
+  contentTestimon  Boolean @default(false)
   // Social
-  socialView      Boolean  @default(false)
-  socialEdit      Boolean  @default(false)
+  socialView       Boolean @default(false)
+  socialEdit       Boolean @default(false)
   // App Users
-  appUsersView    Boolean  @default(false)
-  appUsersBan     Boolean  @default(false)
+  appUsersView     Boolean @default(false)
+  appUsersBan      Boolean @default(false)
   // Challenges
-  challengesView  Boolean  @default(false)
+  challengesView   Boolean @default(false)
   challengesCreate Boolean @default(false)
-  challengesEdit  Boolean  @default(false)
+  challengesEdit   Boolean @default(false)
 
-  admin           AdminUser @relation(fields: [adminId], references: [id], onDelete: Cascade)
+  admin AdminUser @relation(fields: [adminId], references: [id], onDelete: Cascade)
 
   @@map("admin_permissions")
 }
@@ -762,20 +758,20 @@ model AdminPermission {
 //  STRIKE 2 — Buddy Strike (Snap style)
 // ─────────────────────────────────────────────────────────
 model BuddyStrike {
-  id          String    @id @default(uuid())
-  senderId    String
-  receiverId  String
-  matchId     String
-  imageUrl    String    @db.Text
-  caption     String?
-  reactEmoji  String?                  // 💪🔥😤🏆🤝😮
-  viewedAt    DateTime?                // null = not viewed yet
-  expiresAt   DateTime                 // 24hrs if not viewed, 5min after view
-  createdAt   DateTime  @default(now())
+  id         String    @id @default(uuid())
+  senderId   String
+  receiverId String
+  matchId    String
+  imageUrl   String    @db.Text
+  caption    String?
+  reactEmoji String? // 💪🔥😤🏆🤝😮
+  viewedAt   DateTime? // null = not viewed yet
+  expiresAt  DateTime // 24hrs if not viewed, 5min after view
+  createdAt  DateTime  @default(now())
 
-  sender   User  @relation("StrikeSender",   fields: [senderId],   references: [id], onDelete: Cascade)
+  sender   User  @relation("StrikeSender", fields: [senderId], references: [id], onDelete: Cascade)
   receiver User  @relation("StrikeReceiver", fields: [receiverId], references: [id], onDelete: Cascade)
-  match    Match @relation(fields: [matchId], references: [id],    onDelete: Cascade)
+  match    Match @relation(fields: [matchId], references: [id], onDelete: Cascade)
 
   @@index([senderId])
   @@index([receiverId])
@@ -791,19 +787,19 @@ model BuddyStrike {
 model InfluencerApplication {
   id               String    @id @default(uuid())
   userId           String    @unique
-  instagramHandle  String                          // "fitness_rahul_123"
-  claimedFollowers Int                             // Self-reported by user
-  verificationCode String                          // "SESHLLY-X7K9P2" auto-generated
-  codeExpiresAt    DateTime                        // +7 days from apply
-  status           String    @default("pending")   // pending|code_added|approved|rejected
+  instagramHandle  String // "fitness_rahul_123"
+  claimedFollowers Int // Self-reported by user
+  verificationCode String // "SESHLLY-X7K9P2" auto-generated
+  codeExpiresAt    DateTime // +7 days from apply
+  status           String    @default("pending") // pending|code_added|approved|rejected
   rejectedReason   String?
-  canReapplyAt     DateTime?                       // +30 days from rejection
-  reviewedBy       String?                         // Super Admin ID
+  canReapplyAt     DateTime? // +30 days from rejection
+  reviewedBy       String? // Super Admin ID
   reviewedAt       DateTime?
   createdAt        DateTime  @default(now())
   updatedAt        DateTime  @updatedAt
 
-  user             User      @relation("UserApplication", fields: [userId], references: [id], onDelete: Cascade)
+  user User @relation("UserApplication", fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([status])
   @@index([userId])
@@ -815,16 +811,157 @@ model InfluencerSession {
   id           String   @id @default(uuid())
   influencerId String
   fanId        String
-  monthYear    String                              // "2025-08" format
-  sessionCount Int      @default(0)               // Max 3 per month
+  monthYear    String // "2025-08" format
+  sessionCount Int      @default(0) // Max 3 per month
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 
-  influencer   User     @relation("InfluencerSessions", fields: [influencerId], references: [id], onDelete: Cascade)
-  fan          User     @relation("FanSessions",         fields: [fanId],        references: [id], onDelete: Cascade)
+  influencer User @relation("InfluencerSessions", fields: [influencerId], references: [id], onDelete: Cascade)
+  fan        User @relation("FanSessions", fields: [fanId], references: [id], onDelete: Cascade)
 
   @@unique([influencerId, fanId, monthYear])
   @@index([influencerId])
   @@index([fanId])
   @@map("influencer_sessions")
+}
+
+model FlashStreak {
+  id              String    @id @default(uuid())
+  userAId         String
+  userBId         String
+  currentStreak   Int       @default(0)
+  longestStreak   Int       @default(0)
+  lastWindowStart DateTime?
+  userASentAt     DateTime?
+  userBSentAt     DateTime?
+  lastStreakAt    DateTime?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  userA User @relation("FlashStreakUserA", fields: [userAId], references: [id], onDelete: Cascade)
+  userB User @relation("FlashStreakUserB", fields: [userBId], references: [id], onDelete: Cascade)
+
+  @@unique([userAId, userBId])
+  @@map("flash_streaks")
+}
+
+model WaitlistLocation {
+  id         String    @id @default(uuid())
+  city       String
+  country    String    @default("India")
+  launchDate DateTime?
+  bannerOn   Boolean   @default(true)
+  isLaunched Boolean   @default(false)
+  launchedAt DateTime?
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+
+  entries WaitlistEntry[]
+
+  @@map("waitlist_locations")
+}
+
+model WaitlistEntry {
+  id         String   @id @default(uuid())
+  name       String
+  email      String
+  city       String?
+  country    String   @default("India")
+  activity   String?
+  source     String   @default("app") // app | web
+  position   Int
+  userId     String?
+  locationId String?
+  createdAt  DateTime @default(now())
+
+  user     User?             @relation(fields: [userId], references: [id], onDelete: SetNull)
+  location WaitlistLocation? @relation(fields: [locationId], references: [id], onDelete: SetNull)
+
+  @@index([email])
+  @@index([locationId])
+  @@map("waitlist_entries")
+}
+
+model BrandAd {
+  id          String   @id @default(uuid())
+  brandName   String
+  imageUrl    String   @db.VarChar(500)
+  videoUrl    String?  @db.VarChar(500)
+  ctaText     String   @default("Learn More")
+  ctaUrl      String   @db.VarChar(500)
+  cityTarget  String?
+  startDate   DateTime
+  endDate     DateTime
+  frequency   Int      @default(5)
+  isActive    Boolean  @default(true)
+  clicks      Int      @default(0)
+  impressions Int      @default(0)
+  createdAt   DateTime @default(now())
+  createdBy   String?
+
+  @@map("brand_ads")
+}
+
+model UserPhoto {
+  id        String   @id @default(uuid())
+  userId    String
+  url       String   @db.VarChar(500)
+  order     Int      @default(0)
+  createdAt DateTime @default(now())
+
+  user User @relation("UserPhotos", fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("user_photos")
+}
+
+model Referral {
+  id          String         @id @default(uuid())
+  referrerId  String
+  referredId  String?
+  code        String         @unique @db.VarChar(20)
+  status      ReferralStatus @default(pending)
+  rewardGiven Boolean        @default(false)
+  createdAt   DateTime       @default(now())
+
+  referrer User  @relation("ReferralsMade", fields: [referrerId], references: [id], onDelete: Cascade)
+  referred User? @relation("ReferralsReceived", fields: [referredId], references: [id], onDelete: SetNull)
+
+  @@index([referrerId])
+  @@index([code])
+  @@map("referrals")
+}
+
+enum ReferralStatus {
+  pending
+  completed
+}
+
+model VerificationRequest {
+  id              String             @id @default(uuid())
+  userId          String
+  type            VerificationType   @default(id)
+  docUrl          String             @db.VarChar(500)
+  selfieUrl       String?            @db.VarChar(500)
+  status          VerificationStatus @default(pending)
+  reviewedBy      String?
+  rejectionReason String?            @db.Text
+  createdAt       DateTime           @default(now())
+  updatedAt       DateTime           @updatedAt
+
+  user User @relation("VerificationRequests", fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([status])
+  @@map("verification_requests")
+}
+
+enum VerificationType {
+  id
+  selfie
+}
+
+enum VerificationStatus {
+  pending
+  verified
+  rejected
 }

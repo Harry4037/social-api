@@ -25,6 +25,7 @@ const {
   userRouter, matchRouter, sessionRouter, chatRouter,
   notifRouter, subRouter, tokensRouter, uploadRouter,
   challengeRouter, globalLeaderboardRouter, feedRouter,
+  referralRouter
 } = require('./routes/index');
 const authRoutes  = require('./routes/auth.routes');
 const adminRoutes = require('./admin/routes/admin.routes');
@@ -82,6 +83,7 @@ const API = `/api/${process.env.API_VERSION || 'v1'}`;
 app.use(defaultLimiter);
 app.use(`${API}/auth`,          authRoutes);
 app.use(`${API}/users`,         userRouter);
+app.use(`${API}/referral`,         referralRouter);
 app.use(`${API}/match`,         matchRouter);
 app.use(`${API}/sessions`,      sessionRouter);
 app.use(`${API}/chat`,          chatRouter);
