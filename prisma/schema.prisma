@@ -60,6 +60,7 @@ enum UploadFolder {
   avatars
   proofs
   covers
+  verifications
 }
 
 // ─────────────────────────────────────────────────────────
