@@ -111,9 +111,13 @@ app.use(`${API}/strikes`, strikeRouter);     // Strike 2 — Buddy Strike
 app.use(`${API}/influencer`, influencerRouter); // Influencer system
 app.use(`${API}/admin`, adminRoutes);
 app.use(`${API}/verification`, verifRouter);
-app.use(`${API}/flash`,         flashRouter);
-app.use(`${API}/waitlist`,      waitlistRouter);
-app.use(`${API}/feed/ads`,      brandAdsRouter);
+app.use(`${API}/flash`, flashRouter);
+app.use(`${API}/waitlist`, waitlistRouter);
+app.use(`${API}/feed/ads`, brandAdsRouter);
+app.use(`${API}/referral`, referralRouter);
+app.use(`${API}/admin/verifications`, verifRouter);
+app.use(`${API}/admin/brand-ads`,     brandAdsRouter);
+app.use(`${API}/admin/waitlist`,      waitlistRouter);
 
 // ── 404 ───────────────────────────────────────────────────
 app.use((_req, res) => res.status(404).json({ success: false, message: 'Route not found' }));
