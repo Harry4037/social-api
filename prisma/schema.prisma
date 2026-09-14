@@ -61,6 +61,7 @@ enum UploadFolder {
   proofs
   covers
   verifications
+  strike
 }
 
 // ─────────────────────────────────────────────────────────
