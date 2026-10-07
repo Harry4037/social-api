@@ -128,7 +128,7 @@ if (typeof matchCtrl.swipe === 'function') {
   matchRouter.post('/swipe', authenticate, swipeLimiter, [
     body('targetId').isUUID().withMessage('Valid targetId required'),
     body('action').optional().isIn(['like', 'skip', 'super_like']),
-  ], validate, matchCtrl.swipe);
+  ], validate, matchCtrl.checkSuperLikeLimit, matchCtrl.swipe);
 }
 if (typeof matchCtrl.getMatchRequests === 'function') {
   matchRouter.get('/requests', authenticate, matchCtrl.getMatchRequests);
@@ -270,6 +270,10 @@ waitlistRouter.post('/locations/:id/launch', authenticate, waitlistCtrl.launch);
 waitlistRouter.get('/stats', authenticate, waitlistCtrl.getStats);
 waitlistRouter.get('/export', authenticate, waitlistCtrl.exportCsv);
 
+// ── Boost routes ─────────────────────────────────────────
+matchRouter.post('/boost',        authenticate, matchCtrl.boost);
+matchRouter.get('/boost/status',  authenticate, matchCtrl.boostStatus);
+
 // ── Flash Streak routes ──────────────────────────────────
 const flashCtrl = require('../controllers/flash_streak.controller');
 const flashRouter = express.Router();
@@ -282,5 +286,4 @@ module.exports = {
   notifRouter, subRouter, tokensRouter, uploadRouter,
   challengeRouter, globalLeaderboardRouter, feedRouter,
   flashRouter, waitlistRouter, verifRouter, brandAdsRouter,
-  referralRouter
 };

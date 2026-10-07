@@ -121,51 +121,70 @@ router.put('/social', requireRole('ADMIN'), [
   body('links').isArray(),
 ], validate, cms.updateSocialLinks);
 
+// ── CMS Team Access ──────────────────────────────────────
+const cmsCtrl = require('../../controllers/cms.controller');
+
+router.get('/cms/team',            requireRole('SUPER_ADMIN'), cmsCtrl.getTeam);
+router.post('/cms/team/invite',    requireRole('SUPER_ADMIN'), [
+  body('name').notEmpty().trim(),
+  body('email').isEmail().normalizeEmail(),
+  body('role').optional().trim(),
+], validate, cmsCtrl.inviteMember);
+router.put('/cms/team/:id',        requireRole('SUPER_ADMIN'), [
+  param('id').isUUID(),
+], validate, cmsCtrl.updateMember);
+router.put('/cms/team/:id/revoke', requireRole('SUPER_ADMIN'), [
+  param('id').isUUID(),
+], validate, cmsCtrl.revokeMember);
+router.put('/cms/team/:id/restore',requireRole('SUPER_ADMIN'), [
+  param('id').isUUID(),
+], validate, cmsCtrl.restoreMember);
+
 // ── Verification Queue (SUPER_ADMIN) ─────────────────────
 const verifCtrl = require('../../controllers/verification.controller');
 
-router.get('/verifications',             requireRole('ADMIN'), verifCtrl.getQueue);
-router.put('/verifications/:id/approve', requireRole('ADMIN'), [
+router.get('/verifications',             requireRole('SUPER_ADMIN'), verifCtrl.getQueue);
+router.put('/verifications/:id/approve', requireRole('SUPER_ADMIN'), [
   param('id').isUUID(),
 ], validate, audit('verification.approve', 'user'), verifCtrl.approve);
-router.put('/verifications/:id/reject',  requireRole('ADMIN'), [
+router.put('/verifications/:id/reject',  requireRole('SUPER_ADMIN'), [
   param('id').isUUID(),
   body('reason').optional().trim(),
 ], validate, audit('verification.reject', 'user'), verifCtrl.reject);
 
-// ── Brand Ads (ADMIN) ───────────────────────────────
+// ── Brand Ads (SUPER_ADMIN) ───────────────────────────────
 const brandAdsCtrl = require('../../controllers/brand_ads.controller');
 
-router.get('/brand-ads',      requireRole('ADMIN'), brandAdsCtrl.getAll);
-router.post('/brand-ads',     requireRole('ADMIN'), [
+router.get('/brand-ads',      requireRole('SUPER_ADMIN'), brandAdsCtrl.getAll);
+router.post('/brand-ads',     requireRole('SUPER_ADMIN'), [
   body('brandName').notEmpty().trim(),
   body('imageUrl').notEmpty().isURL(),
   body('ctaUrl').notEmpty().isURL(),
   body('startDate').isISO8601(),
   body('endDate').isISO8601(),
 ], validate, audit('brandAd.create', 'brand_ad'), brandAdsCtrl.create);
-router.put('/brand-ads/:id',  requireRole('ADMIN'), [
+router.put('/brand-ads/:id',  requireRole('SUPER_ADMIN'), [
   param('id').isUUID(),
 ], validate, audit('brandAd.update', 'brand_ad'), brandAdsCtrl.update);
-router.delete('/brand-ads/:id', requireRole('ADMIN'), [
+router.delete('/brand-ads/:id', requireRole('SUPER_ADMIN'), [
   param('id').isUUID(),
 ], validate, audit('brandAd.delete', 'brand_ad'), brandAdsCtrl.remove);
 
 // ── Waitlist Manager (SUPER_ADMIN) ────────────────────────
 const waitlistCtrl = require('../../controllers/waitlist.controller');
 
-router.get('/waitlist/stats',                  requireRole('ADMIN'), waitlistCtrl.getStats);
-router.get('/waitlist/export',                 requireRole('ADMIN'), waitlistCtrl.exportCsv);
-router.get('/waitlist/locations',              requireRole('ADMIN'), waitlistCtrl.getLocations);
-router.post('/waitlist/locations',             requireRole('ADMIN'), [
+router.get('/waitlist/stats',                  requireRole('SUPER_ADMIN'), waitlistCtrl.getStats);
+router.get('/waitlist/export',                 requireRole('SUPER_ADMIN'), waitlistCtrl.exportCsv);
+router.get('/waitlist/locations',              requireRole('SUPER_ADMIN'), waitlistCtrl.getLocations);
+router.post('/waitlist/locations',             requireRole('SUPER_ADMIN'), [
   body('city').notEmpty().trim(),
   body('country').optional().trim(),
   body('launchDate').optional().isISO8601(),
 ], validate, audit('waitlist.addLocation', 'waitlist'), waitlistCtrl.addLocation);
-router.put('/waitlist/locations/:id',          requireRole('ADMIN'), [
+router.put('/waitlist/locations/:id',          requireRole('SUPER_ADMIN'), [
   param('id').isUUID(),
 ], validate, audit('waitlist.updateLocation', 'waitlist'), waitlistCtrl.updateLocation);
-router.post('/waitlist/locations/:id/launch',  requireRole('ADMIN'), [
+router.post('/waitlist/locations/:id/launch',  requireRole('SUPER_ADMIN'), [
   param('id').isUUID(),
 ], validate, audit('waitlist.launch', 'waitlist'), waitlistCtrl.launch);
 

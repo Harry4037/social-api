@@ -78,6 +78,41 @@ const getStats = async (req, res, next) => {
   } catch (e) { next(e); }
 };
 
+const getDashboardStats = async (req, res, next) => {
+  try {
+    const now       = new Date();
+    const today     = new Date(now); today.setHours(0, 0, 0, 0);
+
+    // Existing stats + new auto stats
+    const [
+      superLikesToday,
+      activeBoostsNow,
+      boostsToday,
+    ] = await Promise.all([
+      prisma.swipe.count({
+        where: {
+          action:    'super_like',
+          createdAt: { gte: today },
+        },
+      }),
+      prisma.profileBoost.count({
+        where: { expiresAt: { gt: now } },
+      }),
+      prisma.profileBoost.count({
+        where: { createdAt: { gte: today } },
+      }),
+    ]);
+
+    // Add to existing stats return:
+    return res_.success(res, {
+      // ... existing stats ...
+      superLikesToday,   // ⭐ Auto
+      activeBoostsNow,   // ⚡ Live count
+      boostsToday,       // ⚡ Today total
+    });
+  } catch(e) { next(e); }
+};
+
 // GET /admin/dashboard/recent-activity
 const getRecentActivity = async (req, res, next) => {
   try {
@@ -103,4 +138,4 @@ const getRecentActivity = async (req, res, next) => {
   } catch (e) { next(e); }
 };
 
-module.exports = { getStats, getRecentActivity };
+module.exports = { getStats, getRecentActivity, getDashboardStats };

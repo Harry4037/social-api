@@ -6,6 +6,7 @@ const { formatBuddyProfile } = require('../utils/formatUser');
 const { computeCompatibility, haversine } = require('../utils/compatibility');
 const notifSvc = require('../services/notification.service');
 const xpSvc = require('../services/xp.service');
+const infCtrl = require('./influencer.controller');
 
 const DAILY_LIMIT_FREE = 5;
 const DAILY_LIMIT_PRO = 999;
@@ -207,6 +208,8 @@ const removeBuddy = async (req, res, next) => {
   } catch (e) { next(e); }
 };
 
+// ── SWIPE (like/skip/super_like) ─────────────────────────
+// POST /api/match/swipe  { targetId, action }
 const swipe = async (req, res, next) => {
   try {
     const { targetId, action = 'like' } = req.body;
@@ -217,7 +220,7 @@ const swipe = async (req, res, next) => {
 
     // Get target user
     const target = await prisma.user.findUnique({
-      where: { id: targetId },
+      where:  { id: targetId },
       select: { id: true, isInfluencer: true, subscriptionPlan: true },
     });
     if (!target) return res_.error(res, 'User not found', 404);
@@ -257,15 +260,15 @@ const swipe = async (req, res, next) => {
 
     // Record swipe
     await prisma.swipe.upsert({
-      where: { swiperId_swipedId: { swiperId: userId, swipedId: targetId } },
+      where:  { swiperId_swipedId: { swiperId: userId, swipedId: targetId } },
       update: { action },
       create: { id: uuid(), swiperId: userId, swipedId: targetId, action },
     });
 
     // Update daily swipe count
-    const today = new Date(); today.setHours(0, 0, 0, 0);
+    const today = new Date(); today.setHours(0,0,0,0);
     await prisma.dailySwipe.upsert({
-      where: { userId_date: { userId, date: today } },
+      where:  { userId_date: { userId, date: today } },
       update: { count: { increment: 1 } },
       create: { id: uuid(), userId, date: today, count: 1 },
     });
@@ -274,14 +277,14 @@ const swipe = async (req, res, next) => {
     if (action === 'like') {
       await prisma.user.update({
         where: { id: userId },
-        data: { chatTokens: { decrement: 1 } },
+        data:  { chatTokens: { decrement: 1 } },
       });
     }
 
     // Check mutual like → create match
     if (action === 'like' || action === 'super_like') {
       const mutual = await prisma.swipe.findFirst({
-        where: { swiperId: targetId, swipedId: userId, action: { in: ['like', 'super_like'] } },
+        where: { swiperId: targetId, swipedId: userId, action: { in: ['like','super_like'] } },
       });
 
       if (mutual) {
@@ -298,17 +301,17 @@ const swipe = async (req, res, next) => {
         if (!existingMatch) {
           const match = await prisma.match.create({
             data: {
-              id: uuid(),
+              id:      uuid(),
               userAId: userId,
               userBId: targetId,
-              status: 'active',
+              status:  'active',
             },
           });
 
           // Create chat
           await prisma.chat.create({
             data: {
-              id: uuid(),
+              id:      uuid(),
               matchId: match.id,
               userAId: userId,
               userBId: targetId,
@@ -316,8 +319,8 @@ const swipe = async (req, res, next) => {
           });
 
           // Notify both
-          await _notify(userId, `🤝 You matched with ${target.id}!`, 'new_match', { matchId: match.id });
-          await _notify(targetId, `🤝 You have a new match!`, 'new_match', { matchId: match.id });
+          await _notify(userId,  `🤝 You matched with ${target.id}!`, 'new_match', { matchId: match.id });
+          await _notify(targetId, `🤝 You have a new match!`,          'new_match', { matchId: match.id });
 
           return res_.success(res, { matched: true, matchId: match.id }, 'It\'s a match! 🎉');
         }
@@ -345,7 +348,7 @@ const getMatchRequests = async (req, res, next) => {
     const likes = await prisma.swipe.findMany({
       where: {
         swipedId: userId,
-        action: { in: ['like', 'super_like'] },
+        action:   { in: ['like', 'super_like'] },
       },
       include: {
         swiper: {
@@ -379,7 +382,7 @@ const getMatchRequests = async (req, res, next) => {
 
     // Filter: only pending (not yet matched, not rejected by me)
     const mySwipes = await prisma.swipe.findMany({
-      where: { swiperId: userId },
+      where:  { swiperId: userId },
       select: { swipedId: true },
     });
     const iSwiped = new Set(mySwipes.map(s => s.swipedId));
@@ -391,10 +394,10 @@ const getMatchRequests = async (req, res, next) => {
 
     return res_.success(res, {
       requests: pendingRequests.map(l => ({
-        swipeId: l.id,
-        user: l.swiper,
+        swipeId:    l.id,
+        user:       l.swiper,
         isSuperLike: l.action === 'super_like',
-        createdAt: l.createdAt,
+        createdAt:  l.createdAt,
       })),
       count: pendingRequests.length,
     });
@@ -406,7 +409,7 @@ const getMatchRequests = async (req, res, next) => {
 const acceptRequest = async (req, res, next) => {
   try {
     const { swipeId } = req.params;
-    const userId = req.user.id;
+    const userId      = req.user.id;
 
     const swipe = await prisma.swipe.findUnique({ where: { id: swipeId } });
     if (!swipe) return res_.error(res, 'Request not found', 404);
@@ -418,17 +421,17 @@ const acceptRequest = async (req, res, next) => {
     // Create match
     const match = await prisma.match.create({
       data: {
-        id: uuid(),
+        id:      uuid(),
         userAId: fromUserId,
         userBId: userId,
-        status: 'active',
+        status:  'active',
       },
     });
 
     // Create chat
     await prisma.chat.create({
       data: {
-        id: uuid(),
+        id:      uuid(),
         matchId: match.id,
         userAId: fromUserId,
         userBId: userId,
@@ -437,7 +440,7 @@ const acceptRequest = async (req, res, next) => {
 
     // Record my swipe too
     await prisma.swipe.upsert({
-      where: { swiperId_swipedId: { swiperId: userId, swipedId: fromUserId } },
+      where:  { swiperId_swipedId: { swiperId: userId, swipedId: fromUserId } },
       update: { action: 'like' },
       create: { id: uuid(), swiperId: userId, swipedId: fromUserId, action: 'like' },
     });
@@ -461,7 +464,7 @@ const acceptRequest = async (req, res, next) => {
 const declineRequest = async (req, res, next) => {
   try {
     const { swipeId } = req.params;
-    const userId = req.user.id;
+    const userId      = req.user.id;
 
     const swipe = await prisma.swipe.findUnique({ where: { id: swipeId } });
     if (!swipe) return res_.error(res, 'Request not found', 404);
@@ -470,7 +473,7 @@ const declineRequest = async (req, res, next) => {
 
     // Record my decline swipe
     await prisma.swipe.upsert({
-      where: { swiperId_swipedId: { swiperId: userId, swipedId: swipe.swiperId } },
+      where:  { swiperId_swipedId: { swiperId: userId, swipedId: swipe.swiperId } },
       update: { action: 'skip' },
       create: { id: uuid(), swiperId: userId, swipedId: swipe.swiperId, action: 'skip' },
     });
@@ -489,8 +492,9 @@ const _notify = async (userId, message, type, data = {}) => {
         data: JSON.stringify(data), isRead: false,
       },
     });
-  } catch (_) { }
+  } catch (_) {}
 };
+
 
 module.exports = {
   discover, like,
