@@ -57,10 +57,7 @@ const getUserWithStats = async (req, res, next) => {
       superLikesToday,
       superLikesWeek,
       superLikesTotal,
-      activeBoost,
-      boostsWeek,
-      boostsTotal,
-      lastBoost,
+      boostData,
     ] = await Promise.all([
       // Existing user fetch
       prisma.user.findUnique({
@@ -79,7 +76,7 @@ const getUserWithStats = async (req, res, next) => {
       // ⭐ Super Likes today
       prisma.swipe.count({
         where: {
-          userId: id,
+          swiperId: id,
           action: 'super_like',
           createdAt: { gte: today },
         },
@@ -88,7 +85,7 @@ const getUserWithStats = async (req, res, next) => {
       // ⭐ Super Likes this week
       prisma.swipe.count({
         where: {
-          userId: id,
+          swiperId: id,
           action: 'super_like',
           createdAt: { gte: weekStart },
         },
@@ -96,38 +93,19 @@ const getUserWithStats = async (req, res, next) => {
 
       // ⭐ Super Likes all time
       prisma.swipe.count({
-        where: { userId: id, action: 'super_like' },
+        where: { swiperId: id, action: 'super_like' },
       }),
 
-      // ⚡ Active boost right now
-      prisma.profileBoost.findFirst({
-        where: {
-          userId: id,
-          expiresAt: { gt: now },
-        },
-        orderBy: { expiresAt: 'desc' },
-      }),
-
-      // ⚡ Boosts used this week
-      prisma.profileBoost.count({
-        where: {
-          userId: id,
-          createdAt: { gte: weekStart },
-        },
-      }),
-
-      // ⚡ Boosts all time
-      prisma.profileBoost.count({
-        where: { userId: id },
-      }),
-
-      // ⚡ Last boost time
-      prisma.profileBoost.findFirst({
-        where: { userId: id },
-        orderBy: { createdAt: 'desc' },
-        select: { createdAt: true, expiresAt: true },
-      }),
+      // ⚡ Active boost — read boostExpiresAt from User model
+      prisma.user.findUnique({ where: { id }, select: { boostExpiresAt: true } }),
     ]);
+
+    // TODO: add BoostHistory model for full stats
+    const isBoostActive = boostData?.boostExpiresAt && boostData.boostExpiresAt > now;
+    const activeBoost = isBoostActive ? { expiresAt: boostData.boostExpiresAt } : null;
+    const boostsWeek = null;
+    const boostsTotal = null;
+    const lastBoost = null;
 
     if (!user) return res_.error(res, 'User not found', 404);
 
@@ -186,12 +164,9 @@ const getDashboardStats = async (req, res, next) => {
           createdAt: { gte: today },
         },
       }),
-      prisma.profileBoost.count({
-        where: { expiresAt: { gt: now } },
-      }),
-      prisma.profileBoost.count({
-        where: { createdAt: { gte: today } },
-      }),
+      prisma.user.count({ where: { boostExpiresAt: { gt: now } } }),
+      // TODO: add BoostHistory model for full stats
+      Promise.resolve(0),
     ]);
 
     // Add to existing stats return:

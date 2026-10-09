@@ -60,10 +60,7 @@ const join = async (req, res, next) => {
 
     // Auto welcome email/notification
     if (req.user?.id) {
-      await notifSvc.send(req.user.id, 'waitlist_joined', {
-        city,
-        position: entry.position,
-      });
+      await notifSvc.create({ userId: req.user.id, type: 'system', title: 'Waitlist Joined!', message: `You're #${entry.position} on the waitlist!` });
     }
 
     return res_.created(res, {
@@ -161,9 +158,7 @@ const launch = async (req, res, next) => {
     // 1. Send push notifications to app users
     const appUsers = entries.filter(e => e.userId);
     await Promise.allSettled(appUsers.map(entry =>
-      notifSvc.send(entry.userId, 'city_launched', {
-        city: location.city,
-      })
+      notifSvc.create({ userId: entry.userId, type: 'system', title: 'Your city just launched!', message: `Seshlly is now live in ${location.city}! +50 tokens added.` })
     ));
 
     // 2. Credit 50 tokens to app users

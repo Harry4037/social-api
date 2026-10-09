@@ -1,14 +1,19 @@
 'use strict';
+// ─────────────────────────────────────────────────────────
+//  dashboard.controller.js
+//  GET /admin/dashboard/stats
+//  GET /admin/dashboard/recent-activity
+// ─────────────────────────────────────────────────────────
 const prisma = require('../../config/db');
 const res_   = require('../../utils/response');
 
 // GET /admin/dashboard/stats
 const getStats = async (req, res, next) => {
   try {
-    const now      = new Date();
-    const today    = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-    const thisMonth= new Date(now.getFullYear(), now.getMonth(), 1);
-    const lastMonth= new Date(now.getFullYear(), now.getMonth() - 1, 1);
+    const now          = new Date();
+    const today        = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const thisMonth    = new Date(now.getFullYear(), now.getMonth(), 1);
+    const lastMonth    = new Date(now.getFullYear(), now.getMonth() - 1, 1);
     const lastMonthEnd = new Date(now.getFullYear(), now.getMonth(), 0);
 
     const [
@@ -19,6 +24,9 @@ const getStats = async (req, res, next) => {
       totalRevenue, revenueMonth,
       proUsers, eliteUsers,
       totalMessages, messagesToday,
+      // Swipe / engagement stats
+      superLikesToday,
+      totalSwipesToday,
     ] = await Promise.all([
       prisma.user.count(),
       prisma.user.count({ where: { status: 'ACTIVE', isBanned: false } }),
@@ -38,29 +46,33 @@ const getStats = async (req, res, next) => {
       prisma.user.count({ where: { subscriptionPlan: 'elite' } }),
       prisma.message.count(),
       prisma.message.count({ where: { createdAt: { gte: today } } }),
+      // super likes today
+      prisma.swipe.count({ where: { action: 'super_like', createdAt: { gte: today } } }),
+      // all swipes today
+      prisma.swipe.count({ where: { createdAt: { gte: today } } }),
     ]);
 
-    // 7-day daily signups for chart
-    const signupChart = await Promise.all(
-      Array.from({ length: 7 }, (_, i) => {
-        const d   = new Date(today); d.setDate(d.getDate() - (6 - i));
-        const end = new Date(d);      end.setDate(end.getDate() + 1);
-        return prisma.user.count({ where: { createdAt: { gte: d, lt: end } } })
-          .then(count => ({ date: d.toISOString().slice(0, 10), count }));
-      })
-    );
-
-    // 7-day daily revenue for chart (paise → rupees)
-    const revenueChart = await Promise.all(
-      Array.from({ length: 7 }, (_, i) => {
-        const d   = new Date(today); d.setDate(d.getDate() - (6 - i));
-        const end = new Date(d);     end.setDate(end.getDate() + 1);
-        return prisma.order.aggregate({
-          where: { status: 'paid', createdAt: { gte: d, lt: end } },
-          _sum:  { amount: true },
-        }).then(r => ({ date: d.toISOString().slice(0, 10), amount: Math.round((r._sum.amount || 0) / 100) }));
-      })
-    );
+    // 7-day charts
+    const [signupChart, revenueChart] = await Promise.all([
+      Promise.all(
+        Array.from({ length: 7 }, (_, i) => {
+          const d   = new Date(today); d.setDate(d.getDate() - (6 - i));
+          const end = new Date(d);     end.setDate(end.getDate() + 1);
+          return prisma.user.count({ where: { createdAt: { gte: d, lt: end } } })
+            .then(count => ({ date: d.toISOString().slice(0, 10), count }));
+        })
+      ),
+      Promise.all(
+        Array.from({ length: 7 }, (_, i) => {
+          const d   = new Date(today); d.setDate(d.getDate() - (6 - i));
+          const end = new Date(d);     end.setDate(end.getDate() + 1);
+          return prisma.order.aggregate({
+            where: { status: 'paid', createdAt: { gte: d, lt: end } },
+            _sum:  { amount: true },
+          }).then(r => ({ date: d.toISOString().slice(0, 10), amount: Math.round((r._sum.amount || 0) / 100) }));
+        })
+      ),
+    ]);
 
     const userGrowth = newUsersLastMonth > 0
       ? (((newUsersMonth - newUsersLastMonth) / newUsersLastMonth) * 100).toFixed(1)
@@ -73,44 +85,10 @@ const getStats = async (req, res, next) => {
       revenue:   { totalPaise: totalRevenue._sum.amount || 0, totalRupees: Math.round((totalRevenue._sum.amount || 0) / 100), monthPaise: revenueMonth._sum.amount || 0, monthRupees: Math.round((revenueMonth._sum.amount || 0) / 100) },
       plans:     { pro: proUsers, elite: eliteUsers, free: totalUsers - proUsers - eliteUsers },
       messages:  { total: totalMessages, today: messagesToday },
+      engagement: { superLikesToday, swipesToday: totalSwipesToday },
       charts:    { signups: signupChart, revenue: revenueChart },
     });
   } catch (e) { next(e); }
-};
-
-const getDashboardStats = async (req, res, next) => {
-  try {
-    const now       = new Date();
-    const today     = new Date(now); today.setHours(0, 0, 0, 0);
-
-    // Existing stats + new auto stats
-    const [
-      superLikesToday,
-      activeBoostsNow,
-      boostsToday,
-    ] = await Promise.all([
-      prisma.swipe.count({
-        where: {
-          action:    'super_like',
-          createdAt: { gte: today },
-        },
-      }),
-      prisma.profileBoost.count({
-        where: { expiresAt: { gt: now } },
-      }),
-      prisma.profileBoost.count({
-        where: { createdAt: { gte: today } },
-      }),
-    ]);
-
-    // Add to existing stats return:
-    return res_.success(res, {
-      // ... existing stats ...
-      superLikesToday,   // ⭐ Auto
-      activeBoostsNow,   // ⚡ Live count
-      boostsToday,       // ⚡ Today total
-    });
-  } catch(e) { next(e); }
 };
 
 // GET /admin/dashboard/recent-activity
@@ -138,4 +116,5 @@ const getRecentActivity = async (req, res, next) => {
   } catch (e) { next(e); }
 };
 
-module.exports = { getStats, getRecentActivity, getDashboardStats };
+// getDashboardStats = alias for getStats (backward compat)
+module.exports = { getStats, getDashboardStats: getStats, getRecentActivity };

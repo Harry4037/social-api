@@ -37,10 +37,28 @@ const errorHandler = (err, req, res, next) => {
 };
 
 // ── Rate Limiters ─────────────────────────────────────────
+// Limit per LOGGED-IN USER (from the JWT), not per IP.
+// Per-IP limits break in India at launch: mobile networks (Jio/Airtel CGNAT),
+// college & office Wi-Fi put hundreds of users behind ONE IP, so they would
+// all share a single 100-request bucket. Unauthenticated calls fall back to IP.
+const { verifyAccess } = require('../utils/jwt');
+const userOrIpKey = (req) => {
+  const h = req.headers.authorization || '';
+  if (h.startsWith('Bearer ')) {
+    try {
+      const payload = verifyAccess(h.slice(7));
+      if (payload?.sub) return `u:${payload.sub}`;
+    } catch (_) { /* invalid/expired token → IP */ }
+  }
+  return `ip:${req.ip}`;
+};
+
 const defaultLimiter = rateLimit({
   windowMs: Number(process.env.RATE_LIMIT_WINDOW_MS) || 15 * 60 * 1000,
-  max:      Number(process.env.RATE_LIMIT_MAX)        || 100,
+  // ~40 req/min per user — a normal session (discover, chat, feed, polling) fits easily
+  max:      Number(process.env.RATE_LIMIT_MAX)        || 600,
   standardHeaders: true, legacyHeaders: false,
+  keyGenerator: userOrIpKey,
   message: { success: false, message: 'Too many requests, please slow down' },
 });
 

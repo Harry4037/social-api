@@ -3,6 +3,7 @@ const { v4: uuid } = require('uuid');
 const prisma     = require('../config/db');
 const res_       = require('../utils/response');
 const notifSvc   = require('../services/notification.service');
+const { blockedIdsFor, isBlockedBetween } = require('./safety.controller');
 
 const formatMessage = (m) => ({
   id:          m.id,
@@ -15,8 +16,13 @@ const formatMessage = (m) => ({
   isRead:      m.isRead,
   readAt:      m.readAt,
   metadata:    m.metadata,
+  expiresAt:   m.expiresAt ?? null,
   createdAt:   m.createdAt,
 });
+
+const DISAPPEAR_MS = 24 * 60 * 60 * 1000;
+// Messages already past expiry are hidden even before the cron deletes them
+const notExpired = () => ({ OR: [{ expiresAt: null }, { expiresAt: { gt: new Date() } }] });
 
 // GET /chat
 const getChats = async (req, res, next) => {
@@ -25,13 +31,26 @@ const getChats = async (req, res, next) => {
     const myId = req.user.id;
     const skip = (Number(page) - 1) * Number(limit);
 
+    // Hide chats with blocked users (either direction)
+    const blocked = [...(await blockedIdsFor(myId))];
+    const chatWhere = {
+      OR: [{ userAId: myId }, { userBId: myId }],
+      ...(blocked.length && {
+        AND: [{ OR: [
+          { isGroup: true },
+          { userAId: { notIn: blocked }, userBId: { notIn: blocked } },
+        ] }],
+      }),
+    };
+
     const [chats, total] = await Promise.all([
       prisma.chat.findMany({
-        where: { OR: [{ userAId: myId }, { userBId: myId }] },
+        where: chatWhere,
         include: {
           userA: { select: { id: true, firstName: true, lastName: true, avatarUrl: true, lastActiveAt: true } },
           userB: { select: { id: true, firstName: true, lastName: true, avatarUrl: true, lastActiveAt: true } },
           messages: {
+            where: notExpired(),
             orderBy: { createdAt: 'desc' },
             take: 1,
           },
@@ -47,7 +66,7 @@ const getChats = async (req, res, next) => {
         skip,
         take: Number(limit),
       }),
-      prisma.chat.count({ where: { OR: [{ userAId: myId }, { userBId: myId }] } }),
+      prisma.chat.count({ where: chatWhere }),
     ]);
 
     const result = chats.map(c => {
@@ -65,6 +84,7 @@ const getChats = async (req, res, next) => {
         lastMessage:  c.messages[0]?.content || null,
         lastMessageAt:c.lastMessageAt,
         unreadCount:  c._count.messages,
+        disappearing: c.disappearing,
       };
     });
 
@@ -83,19 +103,34 @@ const getMessages = async (req, res, next) => {
       where: { id: req.params.chatId, OR: [{ userAId: myId }, { userBId: myId }] },
     });
     if (!chat) return res_.error(res, 'Chat not found', 404);
+    // Blocked (either direction) → chat is hidden
+    if (!chat.isGroup && chat.userAId && chat.userBId &&
+        await isBlockedBetween(chat.userAId, chat.userBId)) {
+      return res_.error(res, 'Chat not found', 404);
+    }
 
     const [messages, total] = await Promise.all([
       prisma.message.findMany({
-        where:   { chatId: chat.id },
+        where:   { chatId: chat.id, ...notExpired() },
         include: { sender: { select: { firstName: true, lastName: true, avatarUrl: true } } },
         orderBy: { createdAt: 'asc' },
         skip,
         take: Number(limit),
       }),
-      prisma.message.count({ where: { chatId: chat.id } }),
+      prisma.message.count({ where: { chatId: chat.id, ...notExpired() } }),
     ]);
 
-    return res_.paginated(res, messages.map(formatMessage), { page, limit, total });
+    // `disappearing` lets the app show the 24h banner / toggle state
+    return res.status(200).json({
+      success: true,
+      data: messages.map(formatMessage),
+      disappearing: chat.disappearing,
+      pagination: {
+        page: Number(page), limit: Number(limit), total,
+        totalPages: Math.ceil(total / limit),
+        hasMore: page * limit < total,
+      },
+    });
   } catch (e) { next(e); }
 };
 
@@ -109,6 +144,11 @@ const sendMessage = async (req, res, next) => {
       where: { id: req.params.chatId, OR: [{ userAId: myId }, { userBId: myId }] },
     });
     if (!chat) return res_.error(res, 'Chat not found', 404);
+    // Blocked (either direction) → can't message
+    if (!chat.isGroup && chat.userAId && chat.userBId &&
+        await isBlockedBetween(chat.userAId, chat.userBId)) {
+      return res_.error(res, 'You can no longer message this user', 403);
+    }
 
     // Deduct one token for free users per message
     if (req.user.chatTokens < 1) {
@@ -124,6 +164,8 @@ const sendMessage = async (req, res, next) => {
           content,
           type,
           metadata: metadata || undefined,
+          // 24h mode → this message auto-deletes; Normal → kept forever
+          expiresAt: chat.disappearing ? new Date(Date.now() + DISAPPEAR_MS) : null,
         },
         include: { sender: { select: { firstName: true, lastName: true, avatarUrl: true } } },
       }),
@@ -180,4 +222,47 @@ const markRead = async (req, res, next) => {
   } catch (e) { next(e); }
 };
 
-module.exports = { getChats, getMessages, sendMessage, markRead };
+// PATCH /chat/:chatId/mode  { disappearing: true|false }
+// Either member can switch. Only affects messages sent AFTER the switch.
+const setMode = async (req, res, next) => {
+  try {
+    const myId = req.user.id;
+    const disappearing = req.body.disappearing === true || req.body.disappearing === 'true';
+
+    const chat = await prisma.chat.findFirst({
+      where: { id: req.params.chatId, OR: [{ userAId: myId }, { userBId: myId }] },
+    });
+    if (!chat) return res_.error(res, 'Chat not found', 404);
+    if (chat.disappearing === disappearing) {
+      return res_.success(res, { chatId: chat.id, disappearing }, 'No change');
+    }
+
+    const me = await prisma.user.findUnique({ where: { id: myId }, select: { firstName: true } });
+    const content = disappearing
+      ? `⏱ ${me?.firstName || 'Someone'} turned on 24h messages. New messages will disappear after 24 hours.`
+      : `💬 ${me?.firstName || 'Someone'} turned off 24h messages. New messages will be kept.`;
+
+    const [, sysMsg] = await prisma.$transaction([
+      prisma.chat.update({ where: { id: chat.id }, data: { disappearing } }),
+      prisma.message.create({
+        data: {
+          id: uuid(), chatId: chat.id, senderId: myId,
+          content, type: 'system',
+          metadata: { kind: 'chat_mode', disappearing },
+        },
+        include: { sender: { select: { firstName: true, lastName: true, avatarUrl: true } } },
+      }),
+    ]);
+
+    const io = req.app.get('io');
+    if (io) {
+      io.to(`chat:${chat.id}`).emit('chat:mode', { chatId: chat.id, disappearing, byUserId: myId });
+      io.to(`chat:${chat.id}`).emit('message:new', formatMessage(sysMsg));
+    }
+
+    return res_.success(res, { chatId: chat.id, disappearing, message: formatMessage(sysMsg) },
+      disappearing ? '24h messages on' : '24h messages off');
+  } catch (e) { next(e); }
+};
+
+module.exports = { getChats, getMessages, sendMessage, markRead, setMode };

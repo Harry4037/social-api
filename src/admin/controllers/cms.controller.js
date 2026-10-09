@@ -3,11 +3,10 @@
 //  All website CMS endpoints
 //  Auth: JWT + role check middleware
 // ─────────────────────────────────────────────────────────
-const { PrismaClient } = require('@prisma/client');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const { v4: uuid } = require('uuid');
-const prisma = new PrismaClient();
+const prisma = require('../../config/db');
 const res_ = require('../../utils/response');
 
 const JWT_SECRET = process.env.JWT_SECRET || 'change_this_secret';
@@ -602,10 +601,20 @@ const _formatArticle = (a) => ({
   author: a.author,
 });
 
+const restoreMember = async (req, res, next) => {
+  try {
+    const target = await prisma.adminUser.findUnique({ where: { id: req.params.id } });
+    if (!target) return res_.error(res, 'Member not found', 404);
+    if (target.role === 'SUPER_ADMIN') return res_.error(res, 'Cannot modify super admin', 403);
+    await prisma.adminUser.update({ where: { id: req.params.id }, data: { status: 'active' } });
+    return res.json({ success: true, message: 'Access restored' });
+  } catch (e) { next(e); }
+};
+
 module.exports = {
   cmsAuth,
   login, getMe,
-  getTeam, inviteMember, updateMember, revokeMember,
+  getTeam, inviteMember, updateMember, revokeMember, restoreMember,
   getArticles, getArticle, createArticle, updateArticle, deleteArticle,
   getSeoPages, updateSeoPage, addFaq, updateFaq, deleteFaq,
   getContent, updateContent,

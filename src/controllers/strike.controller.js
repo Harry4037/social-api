@@ -3,9 +3,8 @@
 //  Strike 2 — Buddy Strike (Snap style)
 //  One-time view, streak tracking, emoji reactions
 // ─────────────────────────────────────────────────────────
-const { PrismaClient } = require('@prisma/client');
 const { v4: uuid }     = require('uuid');
-const prisma           = new PrismaClient();
+const prisma           = require('../config/db');
 const res_             = require('../utils/response');
 const { awardXP, updateTrust } = require('./xp.controller');
 
@@ -316,7 +315,7 @@ const _notify = async (userId, message, type, data = {}) => {
         userId,
         type,
         title:  message,
-        body:   message,
+        message: message,
         data:   JSON.stringify(data),
         isRead: false,
       },

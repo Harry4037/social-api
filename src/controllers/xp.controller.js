@@ -3,8 +3,7 @@
 //  Centralized XP + Level + Trust + Token logic
 //  Called by session, challenge, strike controllers
 // ─────────────────────────────────────────────────────────
-const { PrismaClient } = require('@prisma/client');
-const prisma = new PrismaClient();
+const prisma = require('../config/db');
 
 // ── LEVEL THRESHOLDS ──────────────────────────────────────
 const LEVELS = [
@@ -272,8 +271,10 @@ const onSessionMissed = async (session) => {
 // ── TRUST DECAY (called by CRON daily) ───────────────────
 const runTrustDecay = async () => {
   const now = new Date();
+  // Only users inactive 8+ days can decay — don't load everyone
+  const cutoff = new Date(now.getTime() - 8 * 24 * 60 * 60 * 1000);
   const users = await prisma.user.findMany({
-    where: { lastActiveAt: { not: null } },
+    where: { lastActiveAt: { not: null, lt: cutoff } },
     select: { id: true, lastActiveAt: true, trustScore: true },
   });
 
@@ -340,7 +341,7 @@ const _createNotification = async (userId, message, type, data = {}) => {
         userId,
         type,
         title:   message,
-        body:    message,
+        message: message,
         data:    JSON.stringify(data),
         isRead:  false,
       },

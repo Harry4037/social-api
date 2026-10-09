@@ -12,9 +12,8 @@
 //  GET /leaderboard          → { success, data: { entries: [...] } }
 // ─────────────────────────────────────────────────────────
 'use strict';
-const { PrismaClient } = require('@prisma/client');
 const { success, created, error } = require('../utils/response');
-const prisma = new PrismaClient();
+const prisma = require('../config/db');
 
 // ── GET /challenges?tier=&type=&city= ─────────────────────
 exports.getChallenges = async (req, res) => {
@@ -200,6 +199,8 @@ exports.getLeaderboard = async (req, res) => {
 
     const where = { status: { in: ['active', 'completed'] } };
     if (challengeId) where.challengeId = challengeId;
+    // City filter in the DB (was applied after take:50 → missing people)
+    if (city) where.user = { city };
 
     const entries = await prisma.challengeEntry.findMany({
       where,
@@ -211,18 +212,16 @@ exports.getLeaderboard = async (req, res) => {
       take:    50,
     });
 
-    const board = entries
-      .filter(e => !city || e.user.city === city)
-      .map((e, i) => ({
-        rank:              i + 1,
-        userId:            e.userId,
-        displayName:       `${e.user.firstName} ${e.user.lastName}`,
-        avatarUrl:         e.user.avatarUrl,
-        city:              e.user.city,
-        buddyName:         e.buddy ? `${e.buddy.firstName} ${e.buddy.lastName}` : null,
-        xpEarned:          e.totalXpEarned,
-        stationsCompleted: e.currentStation - 1,
-      }));
+    const board = entries.map((e, i) => ({
+      rank:              i + 1,
+      userId:            e.userId,
+      displayName:       `${e.user.firstName} ${e.user.lastName}`,
+      avatarUrl:         e.user.avatarUrl,
+      city:              e.user.city,
+      buddyName:         e.buddy ? `${e.buddy.firstName} ${e.buddy.lastName}` : null,
+      xpEarned:          e.totalXpEarned,
+      stationsCompleted: Math.max(0, e.currentStation - 1),
+    }));
 
     return success(res, { entries: board });
   } catch (err) {
@@ -232,56 +231,66 @@ exports.getLeaderboard = async (req, res) => {
 };
 
 // ── GET /global-leaderboard?period=weekly|monthly|alltime&city= ──
+// Weekly / monthly rank by weeklyXp / monthlyXp (reset by cron).
+// Previously every tab ranked by all-time XP, so the tabs looked identical.
+// If I'm not in the top 100, my own row is appended with my real rank.
 exports.getGlobalLeaderboard = async (req, res) => {
   try {
     const { period = 'alltime', city } = req.query;
+    const xpField = period === 'weekly' ? 'weeklyXp'
+                  : period === 'monthly' ? 'monthlyXp'
+                  : 'xpTotal';
 
-    // Build date filter based on period
-    let dateFilter = {};
-    const now = new Date();
-    if (period === 'weekly') {
-      const weekAgo = new Date(now);
-      weekAgo.setDate(weekAgo.getDate() - 7);
-      dateFilter = { updatedAt: { gte: weekAgo } };
-    } else if (period === 'monthly') {
-      const monthAgo = new Date(now);
-      monthAgo.setMonth(monthAgo.getMonth() - 1);
-      dateFilter = { updatedAt: { gte: monthAgo } };
-    }
+    const baseWhere = {
+      status:   'ACTIVE',
+      isBanned: false,
+      ...(city && { city }),
+    };
+    const select = {
+      id: true, firstName: true, lastName: true, avatarUrl: true,
+      city: true, xpTotal: true, weeklyXp: true, monthlyXp: true,
+      level: true, primaryActivity: true,
+    };
 
     const users = await prisma.user.findMany({
-      where: {
-        status:   'ACTIVE',
-        isBanned: false,
-        ...(city && { city }),
-        ...dateFilter,
-      },
-      select: {
-        id:              true,
-        firstName:       true,
-        lastName:        true,
-        avatarUrl:       true,
-        city:            true,
-        xpTotal:         true,
-        level:           true,
-        primaryActivity: true,
-      },
-      orderBy: { xpTotal: 'desc' },
+      where:   { ...baseWhere, [xpField]: { gt: 0 } },
+      select,
+      orderBy: [{ [xpField]: 'desc' }, { xpTotal: 'desc' }],
       take:    100,
     });
 
-    const board = users.map((u, i) => ({
-      rank:            i + 1,
+    const toEntry = (u, rank) => ({
+      rank,
       userId:          u.id,
       displayName:     `${u.firstName} ${u.lastName}`,
       avatarUrl:       u.avatarUrl,
       city:            u.city,
-      xpTotal:         u.xpTotal,
+      xpTotal:         u[xpField],   // XP for the selected period (app shows "X XP")
+      allTimeXp:       u.xpTotal,
       level:           u.level,
       primaryActivity: u.primaryActivity,
-    }));
+    });
 
-    return success(res, { entries: board, period, city: city || null });
+    const board = users.map((u, i) => toEntry(u, i + 1));
+
+    // My rank, even outside the top 100
+    let myRank = null;
+    const mine = board.find(e => e.userId === req.user.id);
+    if (mine) {
+      myRank = mine.rank;
+    } else {
+      const me = await prisma.user.findUnique({ where: { id: req.user.id }, select });
+      const inScope = me && (!city || me.city === city);
+      if (inScope) {
+        const ahead = await prisma.user.count({
+          where: { ...baseWhere, [xpField]: { gt: me[xpField] } },
+        });
+        myRank = ahead + 1;
+        board.push(toEntry(me, myRank));
+      }
+    }
+
+    return success(res, { entries: board, period, city: city || null, myRank });
   } catch (err) {
     console.error('[getGlobalLeaderboard]', err);
     return error(res, 'Failed to fetch global leaderboard');
@@ -347,6 +356,32 @@ exports.postToFeed = async (req, res) => {
       return error(res, 'challengeId and stationTitle required', 400);
     }
 
+    // Feed is for challenge workouts only — challenge must exist
+    const challenge = await prisma.challenge.findUnique({ where: { id: challengeId }, select: { id: true } });
+    if (!challenge) {
+      return error(res, 'Only challenge workouts can be posted to the feed', 400);
+    }
+
+    // XP shown on the post comes from the server, never from the client
+    let serverXp = 0;
+    const { sessionId } = req.body;
+    if (sessionId) {
+      const session = await prisma.workoutSession.findFirst({
+        where: {
+          id: sessionId,
+          OR: [{ userId: req.user.id }, { buddyId: req.user.id }],
+        },
+        include: { participants: true },
+      });
+      if (session) {
+        serverXp = session.xpEarned
+          // buddy session still awaiting confirm → show what it will earn
+          ?? (session.buddyId
+            ? require('./xp.controller').calcSessionXP(session, (session.participants?.length || 0) + 2) + 20
+            : 50);
+      }
+    }
+
     const now      = new Date();
     const expiresAt = new Date(now.getTime() + 24 * 60 * 60 * 1000); // +24h
 
@@ -356,7 +391,7 @@ exports.postToFeed = async (req, res) => {
         userId:         req.user.id,
         stationNum:     stationNum || 0,
         stationTitle,
-        xpAwarded:      xpAwarded  || 0,
+        xpAwarded:      serverXp, // client-sent xpAwarded is ignored
         proofImageUrl:  proofImageUrl  || null,
         isCollab:       isCollab   || false,
         collabUserId:   collabUserId   || null,

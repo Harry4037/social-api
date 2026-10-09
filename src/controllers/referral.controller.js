@@ -98,9 +98,8 @@ const applyCode = async (req, res, next) => {
       where:  { id: userId },
       select: { firstName: true },
     });
-    await notifSvc.send(ref.referrerId, 'referral_success', {
-      name: newUser?.firstName || 'Someone',
-    });
+    const data = { name: newUser?.firstName || 'Someone' };
+    await notifSvc.create({ userId: ref.referrerId, type: 'token', title: 'Referral Bonus!', message: `${data.name} joined! +50 tokens added` });
 
     return res_.success(res, null, '🎁 Referral applied! 50 tokens added to your account.');
   } catch(e) { next(e); }

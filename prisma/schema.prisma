@@ -105,8 +105,9 @@ model User {
   weeklyXp   Int     @default(0)
   monthlyXp  Int     @default(0)
   level      Int     @default(1)
-  chatTokens Int     @default(20)
-  trustScore Decimal @default(30.00) @db.Decimal(5, 2)
+  chatTokens    Int       @default(20)
+  boostExpiresAt DateTime? // Profile boost expiry (null = not boosted)
+  trustScore    Decimal   @default(30.00) @db.Decimal(5, 2)
   idVerified Boolean @default(false)
 
   // Influencer
@@ -164,12 +165,24 @@ model User {
   waitlistEntries      WaitlistEntry[]
   fcmToken             String?
 
+  // Safety (block / report)
+  blocksGiven     UserBlock[]  @relation("BlocksGiven")
+  blocksReceived  UserBlock[]  @relation("BlocksReceived")
+  reportsMade     UserReport[] @relation("ReportsMade")
+  reportsReceived UserReport[] @relation("ReportsReceived")
+  // Gym map check-ins
+  gymCheckins     GymCheckin[]
+
   @@index([email])
   @@index([city])
   @@index([latitude, longitude])
   @@index([subscriptionPlan])
   @@index([primaryActivity])
   @@index([isInfluencer])
+  @@index([lastActiveAt]) // discover: recently active first
+  @@index([xpTotal])      // leaderboards
+  @@index([weeklyXp])
+  @@index([monthlyXp])
   @@map("users")
 }
 
@@ -246,6 +259,11 @@ model WorkoutSession {
   proofImageUrl    String?       @db.Text
   proofVideoUrl    String?       @db.Text
   proofUploadedAt  DateTime?
+  proofUploadedBy  String? // userId who uploaded proof (the other person confirms)
+  confirmedAt      DateTime? // when the other person confirmed proof
+  confirmTimedOut  Boolean       @default(false) // 2h passed without confirmation
+  confirmReminders Int           @default(0) // reminders sent to confirmer (max 3)
+  startReminderSentAt DateTime? // "session in 1 hour" reminder sent
   xpEarned         Int?
   tokensDeducted   Int?
   notes            String?       @db.Text
@@ -299,6 +317,7 @@ model Chat {
   groupName     String?
   lastMessage   String?   @db.Text
   lastMessageAt DateTime?
+  disappearing  Boolean   @default(false) // true = new messages auto-delete after 24h
   createdAt     DateTime  @default(now())
   updatedAt     DateTime  @updatedAt
 
@@ -340,6 +359,7 @@ model Message {
   isRead    Boolean     @default(false)
   readAt    DateTime?
   metadata  Json?
+  expiresAt DateTime? // set only when chat is in 24h mode; null = keep forever
   createdAt DateTime    @default(now())
 
   chat   Chat @relation(fields: [chatId], references: [id], onDelete: Cascade)
@@ -348,6 +368,7 @@ model Message {
   @@index([chatId])
   @@index([senderId])
   @@index([createdAt])
+  @@index([expiresAt])
   @@map("messages")
 }
 
@@ -966,4 +987,72 @@ enum VerificationStatus {
   pending
   verified
   rejected
+}
+
+// ─────────────────────────────────────────────────────────
+//  SAFETY — Block & Report
+// ─────────────────────────────────────────────────────────
+model UserBlock {
+  id        String   @id @default(uuid())
+  blockerId String
+  blockedId String
+  createdAt DateTime @default(now())
+
+  blocker User @relation("BlocksGiven", fields: [blockerId], references: [id], onDelete: Cascade)
+  blocked User @relation("BlocksReceived", fields: [blockedId], references: [id], onDelete: Cascade)
+
+  @@unique([blockerId, blockedId])
+  @@index([blockedId])
+  @@map("user_blocks")
+}
+
+enum ReportStatus {
+  open
+  reviewed   // looked at, no action needed
+  actioned   // user warned / banned
+  dismissed
+}
+
+model UserReport {
+  id          String       @id @default(uuid())
+  reporterId  String
+  reportedId  String
+  reason      String       // harassment | fake_profile | inappropriate | spam | safety | underage | other
+  details     String?      @db.Text
+  context     String?      // where it was reported from: chat | profile | discover
+  status      ReportStatus @default(open)
+  adminNote   String?      @db.Text
+  reviewedBy  String?
+  reviewedAt  DateTime?
+  createdAt   DateTime     @default(now())
+
+  reporter User @relation("ReportsMade", fields: [reporterId], references: [id], onDelete: Cascade)
+  reported User @relation("ReportsReceived", fields: [reportedId], references: [id], onDelete: Cascade)
+
+  @@index([reportedId])
+  @@index([status])
+  @@index([createdAt])
+  @@map("user_reports")
+}
+
+// ─────────────────────────────────────────────────────────
+//  GYM MAP — buddy check-ins (privacy: gym-level, expires)
+// ─────────────────────────────────────────────────────────
+model GymCheckin {
+  id        String   @id @default(uuid())
+  userId    String
+  placeId   String   // Google Place ID
+  gymName   String
+  address   String?
+  latitude  Decimal  @db.Decimal(10, 8)
+  longitude Decimal  @db.Decimal(11, 8)
+  createdAt DateTime @default(now())
+  expiresAt DateTime // check-in visible for 2 hours
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([expiresAt])
+  @@index([placeId])
+  @@map("gym_checkins")
 }

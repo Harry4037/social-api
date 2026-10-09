@@ -1,6 +1,5 @@
 
-const { PrismaClient } = require('@prisma/client');
-const prisma = new PrismaClient();
+const prisma = require('../config/db');
 const res_ = require('../utils/response');
 
 const _formatArticle = (a) => ({

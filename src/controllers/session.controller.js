@@ -3,13 +3,14 @@
 //  POST   /sessions          → scheduleSession
 //  GET    /sessions/my       → getMySessions
 //  POST   /sessions/:id/proof → uploadProof
-//  POST   /sessions/:id/confirm → confirmSession
+//  POST   /sessions/:id/confirm → confirmSession (other person confirms)
+//  GET    /sessions/pending-confirm → getPendingConfirmations
+//  CRON   processProofConfirmations → reminders + 2h timeout close
 //  POST   /sessions/:id/respond → respondToInvite (confirm/decline)
 //  CRON   markIncomplete     → called by scheduler
 // ─────────────────────────────────────────────────────────
-const { PrismaClient } = require('@prisma/client');
+const prisma = require('../config/db');
 const { v4: uuid } = require('uuid');
-const prisma = new PrismaClient();
 const res_ = require('../utils/response');
 const notifSvc = require('../services/notification.service');
 const xpCtrl = require('./xp.controller');
@@ -49,6 +50,12 @@ const formatSession = (s, currentUserId = null) => ({
   proofImageUrl: s.proofImageUrl,
   proofVideoUrl: s.proofVideoUrl,
   proofUploadedAt: s.proofUploadedAt,
+  proofUploadedBy: s.proofUploadedBy ?? null,
+  confirmedAt: s.confirmedAt ?? null,
+  confirmTimedOut: s.confirmTimedOut ?? false,
+  confirmDeadline: s.proofUploadedAt && s.buddyId
+    ? new Date(new Date(s.proofUploadedAt).getTime() + 2 * 60 * 60 * 1000)
+    : null,
   xpEarned: s.xpEarned,
   tokensDeducted: s.tokensDeducted,
   notes: s.notes,
@@ -343,12 +350,7 @@ const respondToInvite = async (req, res, next) => {
 
     // If declined → notify creator, session stays 'scheduled'
     if (action === 'decline') {
-      await notifSvc.sendNotification(session.userId, {
-        type: 'session',
-        title: 'Session Invite Declined',
-        message: 'A buddy declined your session invite.',
-        data: { sessionId: session.id },
-      });
+      await notifSvc.create({ userId: session.userId, type: 'session', title: 'Session Invite Declined', message: 'A buddy declined your session invite.', data: { sessionId: session.id } });
       return res_.success(res, {}, 'Session declined');
     }
 
@@ -359,7 +361,7 @@ const respondToInvite = async (req, res, next) => {
 
     if (pending === 0) {
       // All confirmed — notify creator
-      await notifSvc.notifySessionConfirmed(session.userId, req.user.id, session.id);
+      await notifSvc.create({ userId: session.userId, type: 'session', title: 'Session Confirmed', message: 'Your session was confirmed!', data: { sessionId: session.id } });
     }
 
     return res_.success(res, {}, 'Response recorded');
@@ -369,18 +371,23 @@ const respondToInvite = async (req, res, next) => {
 // ── POST /sessions/:id/proof ───────────────────────────────
 const uploadProof = async (req, res, next) => {
   try {
+    const myId = req.user.id;
     const session = await prisma.workoutSession.findFirst({
       where: {
         id: req.params.id,
         OR: [
-          { userId: req.user.id },
-          { buddyId: req.user.id },
-          { participants: { some: { userId: req.user.id } } },
+          { userId: myId },
+          { buddyId: myId },
+          { participants: { some: { userId: myId } } },
         ],
       },
       ...SESSION_INCLUDE,
     });
     if (!session) return res_.error(res, 'Session not found', 404);
+
+    if (session.status !== 'scheduled' || session.proofUploadedAt) {
+      return res_.error(res, 'Proof already submitted for this session', 409);
+    }
 
     const { proofImageUrl } = req.body;
     if (!proofImageUrl) return res_.error(res, 'proofImageUrl is required', 422);
@@ -397,69 +404,341 @@ const uploadProof = async (req, res, next) => {
       return res_.error(res, 'Proof window closed — must upload within 3 hours of session end', 422);
     }
 
+    // ── AI proof check (Hive) — only when HIVE_API_KEY is configured.
+    // checkProofImage never blocks on API failure (returns valid: true).
+    if (process.env.HIVE_API_KEY) {
+      const { checkProofImage } = require('./verification.controller');
+      const ai = await checkProofImage(proofImageUrl);
+      if (!ai.valid) {
+        return res_.error(res, ai.reason || 'Proof photo rejected. Please upload a real workout photo.', 422,
+          { code: 'PROOF_REJECTED' });
+      }
+    }
+
+    const isBuddySession = !!session.buddyId;
+
+    // ── SOLO: complete immediately + actually award XP ──
+    if (!isBuddySession) {
+      const SOLO_XP = 50;
+      await prisma.workoutSession.update({
+        where: { id: session.id },
+        data: {
+          proofImageUrl,
+          proofUploadedAt: now,
+          proofUploadedBy: myId,
+          status: 'completed',
+          xpEarned: SOLO_XP,
+        },
+      });
+      // Previously only "50" was written on the session — the user never got it.
+      await xpCtrl.awardXP(myId, SOLO_XP, 'session_complete_solo', { sessionId: session.id });
+
+      const updated = await prisma.workoutSession.findFirst({
+        where: { id: session.id }, ...SESSION_INCLUDE,
+      });
+      return res_.success(res, formatSession(updated, myId), 'Proof uploaded! +50 XP');
+    }
+
+    // ── BUDDY: other person must confirm within 2h ──
     const updated = await prisma.workoutSession.update({
       where: { id: session.id },
       data: {
         proofImageUrl,
         proofUploadedAt: now,
-        status: session.buddyId ? 'scheduled' : 'completed', // solo: completed immediately
-        xpEarned: session.buddyId ? null : 50, // solo = immediate XP
+        proofUploadedBy: myId,
+        confirmReminders: 1, // reminder #1 = the notification below
       },
       ...SESSION_INCLUDE,
     });
 
-    // Buddy session → notify buddy to confirm
-    if (session.buddyId && session.buddyId !== req.user.id) {
-      await notifSvc.notifyProofUploaded(session.buddyId, req.user.id, session.id);
+    const confirmerId  = _confirmerOf(updated);
+    const uploaderName = _firstName(updated, myId) || 'Your buddy';
+    const potentialXp  = xpCtrl.calcSessionXP(updated, _participantCount(updated)) + 20;
+    const deadline     = new Date(now.getTime() + CONFIRM_WINDOW_MS);
+
+    if (confirmerId) {
+      // Proof card in their 1:1 chat (one-tap confirm)
+      await _postProofCard(req, updated, myId, confirmerId, deadline, potentialXp);
+      // Push + in-app notification (#1)
+      await notifSvc.notifyProofUploaded(confirmerId, uploaderName, session.id, {
+        deadline: deadline.toISOString(),
+      });
     }
 
-    return res_.success(res, formatSession(updated), 'Proof uploaded');
+    return res_.success(res, formatSession(updated, myId), 'Proof uploaded — waiting for buddy to confirm');
   } catch (e) { next(e); }
 };
 
-// ── POST /sessions/:id/confirm (buddy confirms proof) ──────
+// ── POST /sessions/:id/confirm (the OTHER person confirms proof) ──
 const confirmSession = async (req, res, next) => {
   try {
-    
+    const myId = req.user.id;
     const session = await prisma.workoutSession.findFirst({
-      where: { id: req.params.id, buddyId: req.user.id, status: 'scheduled' },
+      where: {
+        id: req.params.id,
+        status: 'scheduled',
+        proofUploadedAt: { not: null },
+        OR: [{ userId: myId }, { buddyId: myId }],
+      },
       ...SESSION_INCLUDE,
     });
     if (!session) return res_.error(res, 'Session not found or not awaiting your confirmation', 404);
 
-    if (new Date() > new Date(session.scheduledAt)) {
-      return res_.error(res, 'Session time has passed. Cannot confirm now.', 400);
+    // Uploader can't confirm their own proof
+    const uploader = session.proofUploadedBy || session.userId; // legacy rows: creator uploaded
+    if (uploader === myId) {
+      return res_.error(res, 'You uploaded this proof — your buddy has to confirm it', 403);
     }
 
     // 2hr confirmation window
-    const proofTime = new Date(session.proofUploadedAt);
-    const hoursElapsed = (new Date() - proofTime) / (1000 * 60 * 60);
-    if (hoursElapsed > 2) {
+    const hoursElapsed = (Date.now() - new Date(session.proofUploadedAt).getTime()) / (1000 * 60 * 60);
+    if (hoursElapsed > 2 || session.confirmTimedOut) {
       return res_.error(res, 'Confirmation window closed — must confirm within 2 hours of proof upload', 422);
     }
 
-    // Mark completed first
-    await prisma.workoutSession.update({
-      where: { id: session.id },
-      data: { status: 'completed' },
+    // Atomic claim — protects against double confirm / cron timeout race
+    const claim = await prisma.workoutSession.updateMany({
+      where: { id: session.id, status: 'scheduled', confirmTimedOut: false },
+      data:  { status: 'completed', confirmedAt: new Date() },
     });
+    if (claim.count === 0) {
+      return res_.error(res, 'Session already closed', 409);
+    }
 
     // Award XP + Trust + Token to both users
-    const participantCount = (session.participants?.length || 0) + 2;
+    const participantCount = _participantCount(session);
     const xpResults = await xpCtrl.onSessionComplete(session, participantCount);
+
+    await _updateProofCard(session.id, 'confirmed');
 
     const updated = await prisma.workoutSession.findFirst({
       where: { id: session.id },
       ...SESSION_INCLUDE,
     });
 
-    await notifSvc.notifySessionConfirmed(session.userId, req.user.id, session.id);
+    await notifSvc.create({
+      userId: uploader, type: 'session',
+      title: 'Session Confirmed 💪',
+      message: `${_firstName(session, myId) || 'Your buddy'} confirmed your proof! XP added.`,
+      data: { sessionId: session.id },
+    });
 
     return res_.success(res, {
-      session: formatSession(updated),
+      session: formatSession(updated, myId),
       rewards: xpResults,
     }, 'Session confirmed! XP and Trust awarded.');
   } catch (e) { next(e); }
+};
+
+// ── GET /sessions/pending-confirm — proofs waiting for ME ──
+// Used by the home banner + chat proof card
+const getPendingConfirmations = async (req, res, next) => {
+  try {
+    const myId = req.user.id;
+    const since = new Date(Date.now() - CONFIRM_WINDOW_MS);
+    const sessions = await prisma.workoutSession.findMany({
+      where: {
+        status: 'scheduled',
+        confirmTimedOut: false,
+        proofUploadedAt: { gte: since },
+        buddyId: { not: null },
+        OR: [{ userId: myId }, { buddyId: myId }],
+      },
+      orderBy: { proofUploadedAt: 'asc' },
+      ...SESSION_INCLUDE,
+    });
+
+    const mine = sessions.filter(s => _confirmerOf(s) === myId);
+    return res_.success(res, {
+      sessions: mine.map(s => ({
+        ...formatSession(s, myId),
+        uploaderName: _firstName(s, myId),
+        potentialXp:  xpCtrl.calcSessionXP(s, _participantCount(s)) + 20,
+      })),
+      count: mine.length,
+    });
+  } catch (e) { next(e); }
+};
+
+// ── CRON (every 5 min): reminders #2/#3 + 2h timeout close ──
+const processProofConfirmations = async () => {
+  const now = Date.now();
+  const pending = await prisma.workoutSession.findMany({
+    where: {
+      status: 'scheduled',
+      confirmTimedOut: false,
+      proofUploadedAt: { not: null },
+      buddyId: { not: null },
+    },
+    ...SESSION_INCLUDE,
+  });
+
+  let reminded = 0, closed = 0;
+  for (const s of pending) {
+    try {
+      const confirmerId = _confirmerOf(s);
+      const uploaderId  = s.proofUploadedBy || s.userId;
+      if (!confirmerId) continue;
+
+      const elapsedMin   = (now - new Date(s.proofUploadedAt).getTime()) / 60000;
+      const pCount       = _participantCount(s);
+      const baseXp       = xpCtrl.calcSessionXP(s, pCount);
+      const uploaderName = _firstName(s, confirmerId) || 'Your buddy';
+      const confirmerName = _firstName(s, uploaderId) || 'Your buddy';
+
+      // ── 2h passed → close session ──
+      if (elapsedMin >= CONFIRM_WINDOW_MS / 60000) {
+        const claim = await prisma.workoutSession.updateMany({
+          where: { id: s.id, status: 'scheduled', confirmTimedOut: false },
+          data:  { status: 'completed', confirmTimedOut: true, xpEarned: baseXp },
+        });
+        if (claim.count === 0) continue;
+
+        // Uploader did their part → full session XP (no confirm bonus), trust, token
+        await xpCtrl.awardXP(uploaderId, baseXp, 'session_complete_unconfirmed', { sessionId: s.id });
+        await xpCtrl.updateTrust(uploaderId, 2.0, 'session_complete');
+        await xpCtrl.awardToken(uploaderId, 1, 'session_complete');
+
+        // Confirmer loses their share + trust -2
+        await xpCtrl.updateTrust(confirmerId, -2.0, 'proof_confirm_missed');
+
+        await _updateProofCard(s.id, 'expired');
+        await notifSvc.notifyProofAutoCompleted(uploaderId, confirmerName, s.id, baseXp);
+        await notifSvc.notifyProofConfirmMissed(confirmerId, uploaderName, s.id, baseXp + 20);
+        closed++;
+        continue;
+      }
+
+      // ── Reminder #3 — 15 min left ──
+      if (elapsedMin >= 105 && s.confirmReminders < 3) {
+        await prisma.workoutSession.update({ where: { id: s.id }, data: { confirmReminders: 3 } });
+        await notifSvc.notifyProofConfirmReminder(confirmerId, uploaderName, s.id, 15, baseXp + 20);
+        reminded++;
+        continue;
+      }
+
+      // ── Reminder #2 — after 1 hour ──
+      if (elapsedMin >= 60 && s.confirmReminders < 2) {
+        await prisma.workoutSession.update({ where: { id: s.id }, data: { confirmReminders: 2 } });
+        await notifSvc.notifyProofConfirmReminder(confirmerId, uploaderName, s.id,
+          Math.round(120 - elapsedMin), baseXp + 20);
+        reminded++;
+      }
+    } catch (e) {
+      console.error('[processProofConfirmations]', s.id, e.message);
+    }
+  }
+  return { checked: pending.length, reminded, closed };
+};
+
+// ── GET confirm rate for a user ("Confirms on time: 92%") ──
+const getConfirmRate = async (userId) => {
+  const asConfirmer = await prisma.workoutSession.findMany({
+    where: {
+      buddyId: { not: null },
+      proofUploadedAt: { not: null },
+      OR: [{ userId }, { buddyId: userId }],
+      NOT: { proofUploadedBy: userId },
+      AND: [{ OR: [{ confirmedAt: { not: null } }, { confirmTimedOut: true }] }],
+    },
+    select: { confirmedAt: true, confirmTimedOut: true, proofUploadedBy: true },
+  });
+  const relevant = asConfirmer.filter(s => s.proofUploadedBy); // skip legacy rows
+  if (!relevant.length) return null; // no history yet
+  const onTime = relevant.filter(s => s.confirmedAt).length;
+  return Math.round((onTime / relevant.length) * 100);
+};
+
+// ── Helpers ───────────────────────────────────────────────
+const CONFIRM_WINDOW_MS = 2 * 60 * 60 * 1000;
+
+const _participantCount = (s) => (s.participants?.length || 0) + 2;
+
+// The person who must confirm = the other one of creator/buddy
+const _confirmerOf = (s) => {
+  const uploader = s.proofUploadedBy || s.userId;
+  if (uploader === s.userId) return s.buddyId || null;
+  if (uploader === s.buddyId) return s.userId;
+  return s.userId; // a group participant uploaded → creator confirms
+};
+
+// First name of the OTHER person relative to `notThisId`
+const _firstName = (s, notThisId) => {
+  if (s.user && s.user.id !== notThisId) return s.user.firstName;
+  if (s.buddy && s.buddy.id !== notThisId) return s.buddy.firstName;
+  return null;
+};
+
+// Post a 'proof' card in the 1:1 chat between uploader and confirmer
+const _postProofCard = async (req, session, uploaderId, confirmerId, deadline, potentialXp) => {
+  try {
+    const chat = await prisma.chat.findFirst({
+      where: {
+        isGroup: false,
+        OR: [
+          { userAId: uploaderId, userBId: confirmerId },
+          { userAId: confirmerId, userBId: uploaderId },
+        ],
+      },
+    });
+    if (!chat) return;
+
+    const content = '📸 Session proof — confirm karo';
+    const message = await prisma.message.create({
+      data: {
+        id: uuid(),
+        chatId: chat.id,
+        senderId: uploaderId,
+        content,
+        type: 'proof',
+        metadata: {
+          sessionId:   session.id,
+          imageUrl:    session.proofImageUrl,
+          activity:    session.activity,
+          uploaderId,
+          confirmerId,
+          deadline:    deadline.toISOString(),
+          potentialXp,
+          status:      'pending', // pending | confirmed | expired
+        },
+      },
+      include: { sender: { select: { firstName: true, lastName: true, avatarUrl: true } } },
+    });
+    await prisma.chat.update({
+      where: { id: chat.id },
+      data:  { lastMessage: content, lastMessageAt: new Date() },
+    });
+
+    const io = req.app.get('io');
+    if (io) {
+      io.to(`chat:${chat.id}`).emit('message:new', {
+        id: message.id, chatId: message.chatId, senderId: message.senderId,
+        senderName: `${message.sender.firstName} ${message.sender.lastName}`,
+        senderAvatar: message.sender.avatarUrl || null,
+        content: message.content, type: message.type, isRead: false,
+        metadata: message.metadata, createdAt: message.createdAt,
+      });
+    }
+  } catch (e) {
+    console.error('[_postProofCard]', e.message); // never block proof upload
+  }
+};
+
+// Update status on the chat proof card(s) for this session
+const _updateProofCard = async (sessionId, status) => {
+  try {
+    const cards = await prisma.message.findMany({
+      where: { type: 'proof', metadata: { path: '$.sessionId', equals: sessionId } },
+    });
+    for (const m of cards) {
+      await prisma.message.update({
+        where: { id: m.id },
+        data:  { metadata: { ...(m.metadata || {}), status } },
+      });
+    }
+  } catch (e) {
+    console.error('[_updateProofCard]', e.message);
+  }
 };
 
 // ── CRON: Mark sessions incomplete ────────────────────────
@@ -473,6 +752,7 @@ const markIncomplete = async () => {
     where: {
       status: 'scheduled',
       endTime: { lt: deadline3hr },
+      proofUploadedAt: null, // proof uploaded = waiting for buddy confirm, not missed
     },
   });
 
@@ -491,4 +771,7 @@ module.exports = {
   confirmSession,
   respondToInvite,
   markIncomplete,
+  getPendingConfirmations,
+  processProofConfirmations,
+  getConfirmRate,
 };

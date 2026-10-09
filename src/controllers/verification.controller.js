@@ -182,17 +182,13 @@ const approve = async (req, res, next) => {
       userUpdate.idVerified  = true;
       userUpdate.trustScore  = { increment: 10 }; // Trust Score +10
     }
-    if (request.type === 'selfie') {
-      userUpdate.photoVerified = true;
-    }
-
     await prisma.user.update({
       where: { id: request.userId },
       data:  userUpdate,
     });
 
     // Notify user
-    await notifSvc.send(request.userId, 'id_verified', {});
+    await notifSvc.create({ userId: request.userId, type: 'system', title: 'ID Verified!', message: 'Your identity has been verified.' });
 
     return res_.success(res, null, 'Verification approved');
   } catch(e) { next(e); }
@@ -222,7 +218,7 @@ const reject = async (req, res, next) => {
     });
 
     // Notify user — they can resubmit
-    await notifSvc.send(request.userId, 'id_verified', {});
+    await notifSvc.create({ userId: request.userId, type: 'system', title: 'Verification Rejected', message: reason || 'Your verification was not approved.' });
 
     return res_.success(res, null, 'Verification rejected');
   } catch(e) { next(e); }

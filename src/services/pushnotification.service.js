@@ -53,6 +53,7 @@ const TEMPLATES = {
  */
 const send = async (userId, type, data = {}, extra = {}) => {
   try {
+    if (!admin) return; // push not configured
     // Get user FCM token
     const user = await prisma.user.findUnique({
       where: { id: userId },
@@ -128,4 +129,49 @@ const sendMany = async (userIds, type, data = {}) => {
   );
 };
 
-module.exports = { send, sendMany, TEMPLATES };
+// ── Raw push (used by notification.service for every in-app notification) ──
+// Does NOT write to the notifications table (caller already did).
+const sendRaw = async (userId, { title, body, data = {}, collapseKey }) => {
+  if (!admin) return; // push not configured
+  try {
+    const user = await prisma.user.findUnique({
+      where:  { id: userId },
+      select: { fcmToken: true },
+    });
+    if (!user?.fcmToken) return;
+
+    await admin.messaging().send({
+      token: user.fcmToken,
+      notification: { title, body },
+      data: Object.fromEntries(
+        Object.entries(data || {})
+          .filter(([, v]) => v !== undefined && v !== null)
+          .map(([k, v]) => [k, typeof v === 'string' ? v : JSON.stringify(v)])
+      ),
+      android: {
+        ...(collapseKey ? { collapseKey } : {}),
+        notification: {
+          channelId: 'seshlly_default',
+          priority:  'high',
+          sound:     'default',
+          ...(collapseKey ? { tag: collapseKey } : {}), // replaces older one from same chat
+        },
+      },
+      apns: {
+        ...(collapseKey ? { headers: { 'apns-collapse-id': collapseKey.slice(0, 64) } } : {}),
+        payload: { aps: { sound: 'default', ...(collapseKey ? { 'thread-id': collapseKey } : {}) } },
+      },
+    });
+  } catch (e) {
+    // Token expired / app uninstalled → forget it so we stop trying
+    const code = e?.errorInfo?.code || e?.code || '';
+    if (code.includes('registration-token-not-registered') ||
+        code.includes('invalid-registration-token')) {
+      await prisma.user.update({ where: { id: userId }, data: { fcmToken: null } })
+        .catch(() => {});
+    }
+    console.error('[FCM] sendRaw error:', e.message);
+  }
+};
+
+module.exports = { send, sendMany, sendRaw, TEMPLATES };

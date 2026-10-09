@@ -3,8 +3,7 @@
 //  CRUD for challenges + stations. Admin only.
 // ─────────────────────────────────────────────────────────
 'use strict';
-const { PrismaClient } = require('@prisma/client');
-const prisma = new PrismaClient();
+const prisma = require('../../config/db');
 
 // GET /admin/challenges
 exports.list = async (req, res) => {

@@ -2,10 +2,9 @@
 //  influencer.controller.js
 //  Influencer application, verification, discover
 // ─────────────────────────────────────────────────────────
-const { PrismaClient } = require('@prisma/client');
 const { v4: uuid }     = require('uuid');
 const crypto           = require('crypto');
-const prisma           = new PrismaClient();
+const prisma           = require('../config/db');
 const res_             = require('../utils/response');
 
 // ── Generate verification code ────────────────────────────
@@ -564,7 +563,7 @@ const _createNotification = async (userId, message, type) => {
     await prisma.notification.create({
       data: {
         id: uuid(), userId, type,
-        title: message, body: message,
+        title: message, message: message,
         data: '{}', isRead: false,
       },
     });

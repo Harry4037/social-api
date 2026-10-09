@@ -6,59 +6,98 @@ const { formatBuddyProfile } = require('../utils/formatUser');
 const { computeCompatibility, haversine } = require('../utils/compatibility');
 const notifSvc = require('../services/notification.service');
 const xpSvc = require('../services/xp.service');
-const infCtrl = require('./influencer.controller');
-
+const { notBlockedWhere, isBlockedBetween } = require('./safety.controller');
 const DAILY_LIMIT_FREE = 5;
 const DAILY_LIMIT_PRO = 999;
 
 // GET /match/discover
+// Scaling notes:
+//  • Location filter runs IN THE DATABASE (bounding box on the indexed
+//    latitude/longitude columns), then exact haversine in JS. Previously
+//    20 random users were fetched and filtered by distance afterwards,
+//    which returned empty pages once users were spread across cities.
+//  • Already-swiped users are excluded with a relation filter instead of
+//    loading the user's whole swipe history into memory.
+const MAX_RADIUS_KM = 10;
 const discover = async (req, res, next) => {
   try {
     const { activity, level, lat, lng, maxDistance = 50, page = 1, limit = 20 } = req.query;
     const me = await prisma.user.findUnique({ where: { id: req.user.id } });
+    if (!me) return res_.error(res, 'User not found', 404);
 
-    // Users already swiped on
-    const alreadySwiped = await prisma.swipe.findMany({
-      where: { swiperId: req.user.id },
-      select: { swipedId: true },
-    });
-    const excludeIds = alreadySwiped.map(s => s.swipedId).concat([req.user.id]);
+    const pageNum  = Math.max(1, Number(page) || 1);
+    const limitNum = Math.min(50, Math.max(1, Number(limit) || 20));
+    const radiusKm = Math.min(Number(maxDistance) || MAX_RADIUS_KM, MAX_RADIUS_KM);
+
+    // Location: from the app (fresh GPS) or the saved profile location
+    const myLat = lat != null && lat !== '' ? Number(lat) : (me.latitude != null ? Number(me.latitude) : null);
+    const myLng = lng != null && lng !== '' ? Number(lng) : (me.longitude != null ? Number(me.longitude) : null);
+    const hasLocation = Number.isFinite(myLat) && Number.isFinite(myLng);
 
     const where = {
-      id: { notIn: excludeIds },
+      id: { not: req.user.id },
       status: 'ACTIVE',
       isBanned: false,
+      // not swiped by me yet (DB-side, no big NOT IN list)
+      swipesReceived: { none: { swiperId: req.user.id } },
+      // not blocked in either direction
+      ...notBlockedWhere(req.user.id),
     };
     if (activity) where.primaryActivity = activity;
     if (level) where.experienceLevel = level;
 
+    if (hasLocation) {
+      // ~111.32 km per degree latitude; longitude shrinks with cos(lat)
+      const dLat = radiusKm / 111.32;
+      const dLng = radiusKm / (111.32 * Math.max(Math.cos((myLat * Math.PI) / 180), 0.01));
+      where.AND = [{
+        OR: [
+          {
+            latitude:  { gte: myLat - dLat, lte: myLat + dLat },
+            longitude: { gte: myLng - dLng, lte: myLng + dLng },
+          },
+          // users who never shared location stay discoverable (old behaviour)
+          { latitude: null },
+        ],
+      }];
+    }
+
+    const now = new Date();
+    // Over-fetch 2x so the exact-circle filter below still fills a page
     const users = await prisma.user.findMany({
       where,
-      take: Number(limit),
-      skip: (Number(page) - 1) * Number(limit),
+      orderBy: [{ lastActiveAt: 'desc' }], // recently active people first
+      take: limitNum * 2,
+      skip: (pageNum - 1) * limitNum * 2,
       include: { _count: { select: { matchesA: true, sessionsAsUser: true } } },
     });
+    const boostedUserIds = new Set(
+      users.filter(u => u.boostExpiresAt && u.boostExpiresAt > now).map(u => u.id)
+    );
+    const meForDistance = hasLocation ? { ...me, latitude: myLat, longitude: myLng } : me;
 
     // Compute compat + distance, apply geo filter
     const results = users
       .map(u => {
         const compatibilityScore = computeCompatibility(me, u);
-        const distanceKm = me.latitude && me.longitude && u.latitude && u.longitude
-          ? haversine(Number(me.latitude), Number(me.longitude), Number(u.latitude), Number(u.longitude))
+        const distanceKm = meForDistance.latitude != null && meForDistance.longitude != null &&
+            u.latitude != null && u.longitude != null
+          ? haversine(Number(meForDistance.latitude), Number(meForDistance.longitude), Number(u.latitude), Number(u.longitude))
           : null;
         const isOnline = u.lastActiveAt
           ? (Date.now() - new Date(u.lastActiveAt).getTime()) < 2 * 60 * 1000
           : false;
-        return { ...u, compatibilityScore, distanceKm, isOnline };
+        const isBoosted = boostedUserIds.has(u.id);
+        return { ...u, compatibilityScore, distanceKm, isOnline, isBoosted };
       })
       .filter(u => {
-        // Hard cap — 10km max
-        if (u.distanceKm !== null && u.distanceKm > 10) return false;
-        // maxDistance from query (but never more than 10)
-        const radius = Math.min(Number(maxDistance), 10);
-        return u.distanceKm === null || u.distanceKm <= radius;
+        // Hard cap — 10km max (maxDistance from query, never more than 10)
+        return u.distanceKm === null || u.distanceKm <= radiusKm;
       })
       .sort((a, b) => {
+        // 0th priority — boosted profiles always first
+        if (a.isBoosted !== b.isBoosted) return b.isBoosted ? 1 : -1;
+
         // 1st priority — same primary activity as logged in user
         const myActivity = me.primaryActivity;
         const aIsSame = a.primaryActivity === myActivity ? 0 : 1;
@@ -78,7 +117,9 @@ const discover = async (req, res, next) => {
         compatibilityScore: u.compatibilityScore,
         distanceKm: u.distanceKm,
         isOnline: u.isOnline,
-      }));
+        isBoosted: u.isBoosted,
+      }))
+      .slice(0, limitNum);
 
     return res_.success(res, results);
   } catch (e) { next(e); }
@@ -91,6 +132,7 @@ const like = async (req, res, next) => {
     const myId = req.user.id;
 
     if (targetUserId === myId) return res_.error(res, 'Cannot like yourself', 400);
+    if (await isBlockedBetween(myId, targetUserId)) return res_.error(res, 'User not found', 404);
 
     // Daily swipe quota
     const today = new Date().toISOString().slice(0, 10);
@@ -217,6 +259,7 @@ const swipe = async (req, res, next) => {
 
     if (!targetId) return res_.error(res, 'targetId required', 422);
     if (userId === targetId) return res_.error(res, 'Cannot swipe yourself', 400);
+    if (await isBlockedBetween(userId, targetId)) return res_.error(res, 'User not found', 404);
 
     // Get target user
     const target = await prisma.user.findUnique({
@@ -250,8 +293,9 @@ const swipe = async (req, res, next) => {
     if (req.user.subscriptionPlan === 'free') {
       const today = new Date();
       today.setHours(0, 0, 0, 0);
-      const dailySwipe = await prisma.dailySwipe.findFirst({
-        where: { userId, date: { gte: today } },
+      // DailySwipe.date is a 'YYYY-MM-DD' String (see upsert below)
+      const dailySwipe = await prisma.dailySwipe.findUnique({
+        where: { userId_date: { userId, date: new Date().toISOString().slice(0, 10) } },
       });
       if (dailySwipe && dailySwipe.count >= 10)
         return res_.error(res, 'Daily swipe limit reached. Upgrade to Pro for unlimited swipes.', 429,
@@ -268,9 +312,9 @@ const swipe = async (req, res, next) => {
     // Update daily swipe count
     const today = new Date(); today.setHours(0,0,0,0);
     await prisma.dailySwipe.upsert({
-      where:  { userId_date: { userId, date: today } },
+      where:  { userId_date: { userId, date: new Date().toISOString().slice(0, 10) } },
       update: { count: { increment: 1 } },
-      create: { id: uuid(), userId, date: today, count: 1 },
+      create: { id: uuid(), userId, date: new Date().toISOString().slice(0, 10), count: 1 },
     });
 
     // Deduct 1 chat token for like (to start chat)
@@ -482,13 +526,102 @@ const declineRequest = async (req, res, next) => {
   } catch (e) { next(e); }
 };
 
+// ── Boost ─────────────────────────────────────────────────
+// POST /match/boost  — costs 5 tokens, boosts for 30 min
+const boost = async (req, res, next) => {
+  try {
+    const BOOST_COST_TOKENS = 5;
+    const BOOST_DURATION_MS = 30 * 60 * 1000; // 30 minutes
+
+    const user = await prisma.user.findUnique({
+      where: { id: req.user.id },
+      select: { id: true, chatTokens: true, boostExpiresAt: true },
+    });
+
+    if (!user) return res_.error(res, 'User not found', 404);
+
+    // Check if already boosted
+    if (user.boostExpiresAt && user.boostExpiresAt > new Date()) {
+      const remaining = Math.round((user.boostExpiresAt - Date.now()) / 60000);
+      return res_.error(res, `Already boosted — ${remaining} min remaining`, 400);
+    }
+
+    // Check tokens
+    if (user.chatTokens < BOOST_COST_TOKENS) {
+      return res_.error(res, `Not enough tokens (need ${BOOST_COST_TOKENS}, have ${user.chatTokens})`, 402);
+    }
+
+    const boostExpiresAt = new Date(Date.now() + BOOST_DURATION_MS);
+
+    await prisma.user.update({
+      where: { id: req.user.id },
+      data: {
+        chatTokens:    { decrement: BOOST_COST_TOKENS },
+        boostExpiresAt,
+      },
+    });
+
+    return res_.success(res, {
+      boostExpiresAt,
+      tokensRemaining: user.chatTokens - BOOST_COST_TOKENS,
+      durationMinutes: 30,
+    }, 'Profile boosted for 30 minutes!');
+  } catch (e) { next(e); }
+};
+
+// GET /match/boost/status
+const boostStatus = async (req, res, next) => {
+  try {
+    const user = await prisma.user.findUnique({
+      where:  { id: req.user.id },
+      select: { boostExpiresAt: true, chatTokens: true },
+    });
+
+    const now       = new Date();
+    const isActive  = user.boostExpiresAt && user.boostExpiresAt > now;
+    const remaining = isActive ? Math.round((user.boostExpiresAt - now) / 60000) : 0;
+
+    return res_.success(res, {
+      isActive,
+      boostExpiresAt:   isActive ? user.boostExpiresAt : null,
+      remainingMinutes: remaining,
+      tokens:           user.chatTokens,
+    });
+  } catch (e) { next(e); }
+};
+
+// ── Super Like daily limit (middleware for POST /match/swipe) ──
+// Referenced by routes/index.js but was never defined → Express threw
+// "Route.post() requires a callback function" at boot.
+const SUPER_LIKE_LIMIT_FREE = 1;
+const SUPER_LIKE_LIMIT_PAID = 5;
+const checkSuperLikeLimit = async (req, res, next) => {
+  try {
+    if (req.body?.action !== 'super_like') return next();
+    const limit = req.user.subscriptionPlan === 'free'
+      ? SUPER_LIKE_LIMIT_FREE
+      : SUPER_LIKE_LIMIT_PAID;
+    const since = new Date(); since.setHours(0, 0, 0, 0);
+    const used = await prisma.swipe.count({
+      where: { swiperId: req.user.id, action: 'super_like', createdAt: { gte: since } },
+    });
+    if (used >= limit) {
+      return res_.error(res,
+        `Daily Super Like limit reached (${limit}/day).`
+          + (req.user.subscriptionPlan === 'free' ? ' Upgrade for more.' : ''),
+        429, { code: 'SUPER_LIKE_LIMIT_REACHED', limit });
+    }
+    return next();
+  } catch (e) { next(e); }
+};
+
 // ── Helper ────────────────────────────────────────────────
 const _notify = async (userId, message, type, data = {}) => {
   try {
     await prisma.notification.create({
       data: {
         id: uuid(), userId, type,
-        title: message, body: message,
+        title: message, message: message,
         data: JSON.stringify(data), isRead: false,
       },
     });
@@ -501,5 +634,7 @@ module.exports = {
   skip, getBuddies,
   removeBuddy, swipe,
   getMatchRequests,
-  acceptRequest, declineRequest
+  acceptRequest, declineRequest,
+  boost, boostStatus,
+  checkSuperLikeLimit,
 };

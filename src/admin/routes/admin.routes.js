@@ -30,6 +30,7 @@ router.get('/dashboard/recent-activity', dashCtrl.getRecentActivity);
 // ── Users (ADMIN+) ────────────────────────────────────────
 router.get('/users', requireRole('SUPPORT'), usersCtrl.listUsers);
 router.get('/users/:id', requireRole('SUPPORT'), [param('id').isUUID()], validate, usersCtrl.getUser);
+router.get('/users/:id/stats', requireRole('SUPPORT'), [param('id').isUUID()], validate, usersCtrl.getUserWithStats);
 router.patch('/users/:id', requireRole('ADMIN'), [param('id').isUUID()], validate, audit('user.update', 'user'), usersCtrl.updateUser);
 router.post('/users/:id/ban', requireRole('MODERATOR'), [param('id').isUUID()], validate, audit('user.ban', 'user'), usersCtrl.banUser);
 router.post('/users/:id/unban', requireRole('MODERATOR'), [param('id').isUUID()], validate, audit('user.unban', 'user'), usersCtrl.unbanUser);
@@ -122,7 +123,7 @@ router.put('/social', requireRole('ADMIN'), [
 ], validate, cms.updateSocialLinks);
 
 // ── CMS Team Access ──────────────────────────────────────
-const cmsCtrl = require('../../controllers/cms.controller');
+const cmsCtrl = require('../controllers/cms.controller');
 
 router.get('/cms/team',            requireRole('SUPER_ADMIN'), cmsCtrl.getTeam);
 router.post('/cms/team/invite',    requireRole('SUPER_ADMIN'), [
@@ -187,5 +188,15 @@ router.put('/waitlist/locations/:id',          requireRole('SUPER_ADMIN'), [
 router.post('/waitlist/locations/:id/launch',  requireRole('SUPER_ADMIN'), [
   param('id').isUUID(),
 ], validate, audit('waitlist.launch', 'waitlist'), waitlistCtrl.launch);
+
+// ── Safety: user reports (MODERATOR+) ────────────────────
+const safetyCtrl = require('../../controllers/safety.controller');
+router.get('/reports', requireRole('MODERATOR'), safetyCtrl.adminListReports);
+router.patch('/reports/:id', requireRole('MODERATOR'), [
+  param('id').isUUID(),
+  body('status').optional().isIn(['open', 'reviewed', 'actioned', 'dismissed']),
+  body('adminNote').optional({ nullable: true }).isString(),
+  body('banUser').optional().isBoolean(),
+], validate, audit('report.update', 'user'), safetyCtrl.adminUpdateReport);
 
 module.exports = router;

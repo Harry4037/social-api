@@ -59,6 +59,9 @@ const getBuddyProfile = async (req, res, next) => {
       include: { _count: { select: { matchesA: true, sessionsAsUser: true, challengeEntries: true } } },
     });
     if (!user) return res_.error(res, 'User not found', 404);
+    // Blocked either way → profile hidden
+    const { isBlockedBetween } = require('./safety.controller');
+    if (await isBlockedBetween(req.user.id, user.id)) return res_.error(res, 'User not found', 404);
 
     const me = await prisma.user.findUnique({ where: { id: req.user.id } });
     const { computeCompatibility, haversine } = require('../utils/compatibility');
@@ -72,7 +75,13 @@ const getBuddyProfile = async (req, res, next) => {
       ? (Date.now() - new Date(user.lastActiveAt).getTime()) < 2 * 60 * 1000
       : false;
 
-    return res_.success(res, formatBuddyProfile(user, { compatibilityScore: compat, distanceKm: distKm, isOnline }));
+    // "Confirms on time: X%" — null when no confirm history yet
+    const confirmRate = await require('./session.controller').getConfirmRate(user.id).catch(() => null);
+
+    return res_.success(res, {
+      ...formatBuddyProfile(user, { compatibilityScore: compat, distanceKm: distKm, isOnline }),
+      confirmRate,
+    });
   } catch (e) { next(e); }
 };
 

@@ -16,13 +16,22 @@ const authenticate = async (req, res, next) => {
       where: { id: payload.sub },
       select: {
         id: true, email: true, status: true, isBanned: true,
-        subscriptionPlan: true, chatTokens: true,
+        subscriptionPlan: true, chatTokens: true, lastActiveAt: true,
       },
     });
 
     if (!user)           return error(res, 'User not found', 401);
     if (user.isBanned)   return error(res, 'Account suspended', 403);
     if (user.status === 'BANNED') return error(res, 'Account banned', 403);
+
+    // Keep lastActiveAt fresh (max one write per 5 min per user).
+    // Trust decay, Discover ordering and win-back reminders depend on it —
+    // before, it only updated when the user chatted.
+    const ACTIVE_WRITE_MS = 5 * 60 * 1000;
+    if (!user.lastActiveAt || Date.now() - new Date(user.lastActiveAt).getTime() > ACTIVE_WRITE_MS) {
+      prisma.user.update({ where: { id: user.id }, data: { lastActiveAt: new Date() } })
+        .catch(() => {});
+    }
 
     req.user = user;
     next();
