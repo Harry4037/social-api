@@ -112,7 +112,9 @@ const getRecentActivity = async (req, res, next) => {
         include: { admin: { select: { firstName: true, lastName: true, role: true } } },
       }),
     ]);
-    return res_.success(res, { recentUsers, recentOrders, recentSessions, auditLogs });
+    // Audit logs are ADMIN-only (same as /admin/audit-logs)
+    const canAudit = ['ADMIN', 'SUPER_ADMIN'].includes(req.admin?.role);
+    return res_.success(res, { recentUsers, recentOrders, recentSessions, auditLogs: canAudit ? auditLogs : [] });
   } catch (e) { next(e); }
 };
 

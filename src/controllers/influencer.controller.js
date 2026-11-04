@@ -158,14 +158,16 @@ const getMyStatus = async (req, res, next) => {
 // GET /api/influencer/discover
 const discoverInfluencers = async (req, res, next) => {
   try {
-    const { activity, city, page = 1 } = req.query;
-    const take = 20;
-    const skip = (Number(page) - 1) * take;
+    const { activity, city } = req.query;
+    const { take, skip } = require('../utils/paging').pageParams(req.query, { def: 20, max: 20 });
 
     const influencers = await prisma.user.findMany({
       where: {
         isInfluencer: true,
         deletedAt:    null,
+        isBanned:     false,
+        status:       'ACTIVE',
+        ...require('./safety.controller').notBlockedWhere(req.user.id),
         ...(activity ? { primaryActivity: activity } : {}),
         ...(city     ? { city }                      : {}),
       },
@@ -230,7 +232,13 @@ const discoverInfluencers = async (req, res, next) => {
 const getInfluencerProfile = async (req, res, next) => {
   try {
     const inf = await prisma.user.findFirst({
-      where: { id: req.params.id, isInfluencer: true, deletedAt: null },
+      // route param is :influencerId — `req.params.id` was undefined, so every
+      // profile link showed the FIRST influencer in the table
+      where: {
+        id: req.params.influencerId, isInfluencer: true, deletedAt: null,
+        isBanned: false, status: 'ACTIVE',
+        ...require('./safety.controller').notBlockedWhere(req.user.id),
+      },
       select: {
         id: true, firstName: true, lastName: true,
         avatarUrl: true, city: true, primaryActivity: true,
@@ -558,17 +566,8 @@ const _currentMonthYear = () => {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
 };
 
-const _createNotification = async (userId, message, type) => {
-  try {
-    await prisma.notification.create({
-      data: {
-        id: uuid(), userId, type,
-        title: message, message: message,
-        data: '{}', isRead: false,
-      },
-    });
-  } catch (_) {}
-};
+const _createNotification = (userId, message, kind) =>
+  require('../services/notification.service').notifyKind(userId, kind, message).catch(() => null);
 
 const _sendCodeNotification = async (userId, code, handle, expiresAt) => {
   await _createNotification(userId,

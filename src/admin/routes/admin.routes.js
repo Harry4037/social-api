@@ -11,7 +11,7 @@ const contentCtrl = require('../controllers/adminContent.controller');
 const cms = require('../controllers/cms.controller');
 
 // ── Public ────────────────────────────────────────────────
-router.post('/auth/login', [
+router.post('/auth/login', require('../../middleware/middleware').authLimiter, [
   body('email').isEmail().normalizeEmail(),
   body('password').notEmpty(),
 ], validate, authCtrl.login);
@@ -22,10 +22,15 @@ router.use(adminAuth);
 // Auth
 router.get('/auth/me', authCtrl.me);
 router.post('/auth/change-password', authCtrl.changePassword);
+// 2-factor login (Google Authenticator)
+router.post('/auth/2fa/setup', authCtrl.setup2fa);
+router.post('/auth/2fa/enable', [body('otp').isLength({ min: 6, max: 6 }).isNumeric()], validate, authCtrl.enable2fa);
+router.post('/auth/2fa/disable', [body('otp').isLength({ min: 6, max: 6 }).isNumeric()], validate, authCtrl.disable2fa);
 
 // Dashboard
-router.get('/dashboard/stats', dashCtrl.getStats);
-router.get('/dashboard/recent-activity', dashCtrl.getRecentActivity);
+// Panel roles only (CMS editors have no rank → were reading revenue + emails)
+router.get('/dashboard/stats', requireRole('SUPPORT'), dashCtrl.getStats);
+router.get('/dashboard/recent-activity', requireRole('SUPPORT'), dashCtrl.getRecentActivity);
 
 // ── Users (ADMIN+) ────────────────────────────────────────
 router.get('/users', requireRole('SUPPORT'), usersCtrl.listUsers);
@@ -62,7 +67,8 @@ router.get('/audit-logs', requireRole('ADMIN'), contentCtrl.listAuditLogs);
 
 // ── Admin accounts (SUPER_ADMIN only) ─────────────────────
 router.get('/admins', requireRole('SUPER_ADMIN'), usersCtrl.listAdmins);
-router.post('/admins', requireRole('SUPER_ADMIN'), [body('email').isEmail(), body('password').isLength({ min: 8 }), body('firstName').notEmpty(), body('lastName').notEmpty()], validate, audit('admin.create', 'admin'), usersCtrl.createAdmin);
+router.post('/admins', requireRole('SUPER_ADMIN'), [body('email').isEmail(), body('password').isLength({ min: 10 }).withMessage('Password: at least 10 characters')
+  .matches(/[A-Z]/).withMessage('Password: add a capital letter').matches(/[0-9]/).withMessage('Password: add a number'), body('firstName').notEmpty(), body('lastName').notEmpty()], validate, audit('admin.create', 'admin'), usersCtrl.createAdmin);
 router.patch('/admins/:id', requireRole('SUPER_ADMIN'), [param('id').isUUID()], validate, audit('admin.update', 'admin'), usersCtrl.updateAdmin);
 
 

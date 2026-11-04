@@ -1,9 +1,11 @@
 'use strict';
-const bcrypt = require('bcryptjs');
+const { hashPassword, verifyPassword } = require('../../utils/password');
 const { v4: uuid } = require('uuid');
 const prisma = require('../../config/db');
 const res_ = require('../../utils/response');
 const { formatUser } = require('../../utils/formatUser');
+
+const ADMIN_ROLES = ['SUPER_ADMIN', 'ADMIN', 'MODERATOR', 'ANALYST', 'SUPPORT'];
 
 const userSelect = {
   include: { _count: { select: { matchesA: true, sessionsAsUser: true, orders: true } } },
@@ -12,12 +14,16 @@ const userSelect = {
 // GET /admin/users
 const listUsers = async (req, res, next) => {
   try {
-    const {
-      page = 1, limit = 20, search = '', status, plan,
-      activity, sort = 'createdAt', order = 'desc',
-    } = req.query;
-
-    const skip = (Number(page) - 1) * Number(limit);
+    const { search = '', status, plan, activity } = req.query;
+    // Allow-listed sort (ordering by passwordHash etc. leaked hash order;
+    // unknown columns caused 500s) and a hard page-size cap
+    const SORTABLE = ['createdAt', 'lastActiveAt', 'lastLoginAt', 'xpTotal', 'level', 'trustScore', 'firstName', 'email'];
+    if (req.query.sort && !SORTABLE.includes(req.query.sort)) {
+      return res_.error(res, `sort must be one of: ${SORTABLE.join(', ')}`, 422);
+    }
+    const sort  = req.query.sort || 'createdAt';
+    const order = req.query.order === 'asc' ? 'asc' : 'desc';
+    const { page, limit, skip } = require('../../utils/paging').pageParams(req.query, { def: 20, max: 100 });
     const where = {};
 
     if (search) {
@@ -34,7 +40,7 @@ const listUsers = async (req, res, next) => {
     if (activity) where.primaryActivity = activity;
 
     const [users, total] = await Promise.all([
-      prisma.user.findMany({ where, skip, take: Number(limit), orderBy: { [sort]: order }, ...userSelect }),
+      prisma.user.findMany({ where, skip, take: limit, orderBy: { [sort]: order }, ...userSelect }),
       prisma.user.count({ where }),
     ]);
 
@@ -203,6 +209,20 @@ const updateUser = async (req, res, next) => {
       'trustScore', 'idVerified', 'isInfluencer', 'subscriptionPlan', 'subscriptionExpiry'];
     const data = {};
     for (const k of allowed) { if (req.body[k] !== undefined) data[k] = req.body[k]; }
+    // Basic sanity: a bad email could be used to take the account over via
+    // forgot-password; numbers must stay in sane ranges
+    if (data.email !== undefined) {
+      const e = String(data.email).trim().toLowerCase();
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(e) || e.length > 191) return res_.error(res, 'Invalid email', 422);
+      data.email = e;
+    }
+    const bounds = { chatTokens: [0, 1000], xpTotal: [0, 10000000], level: [1, 100], trustScore: [0, 100] };
+    for (const [k, [lo, hi]] of Object.entries(bounds)) {
+      if (data[k] === undefined) continue;
+      const n = Number(data[k]);
+      if (!Number.isFinite(n) || n < lo || n > hi) return res_.error(res, `${k} must be between ${lo} and ${hi}`, 422);
+      data[k] = n;
+    }
 
     const user = await prisma.user.update({ where: { id: req.params.id }, data, ...userSelect });
     return res_.success(res, formatUser(user), 'User updated');
@@ -216,8 +236,9 @@ const banUser = async (req, res, next) => {
       where: { id: req.params.id },
       data: { isBanned: true, status: 'BANNED' },
     });
-    // Invalidate all sessions
+    // Invalidate all sessions + drop live sockets (chat kept working before)
     await prisma.refreshToken.deleteMany({ where: { userId: req.params.id } });
+    require('../../sockets/socket').disconnectUser(req.app.get('io'), req.params.id);
     return res_.success(res, null, 'User banned');
   } catch (e) { next(e); }
 };
@@ -225,6 +246,10 @@ const banUser = async (req, res, next) => {
 // POST /admin/users/:id/unban
 const unbanUser = async (req, res, next) => {
   try {
+    const u = await prisma.user.findUnique({ where: { id: req.params.id }, select: { deletedAt: true } });
+    if (!u) return res_.error(res, 'User not found', 404);
+    // A deleted account stays deleted (unban used to bring it back)
+    if (u.deletedAt) return res_.error(res, 'This account was deleted and cannot be restored', 409);
     await prisma.user.update({
       where: { id: req.params.id },
       data: { isBanned: false, status: 'ACTIVE' },
@@ -274,10 +299,13 @@ const listAdmins = async (req, res, next) => {
 const createAdmin = async (req, res, next) => {
   try {
     const { email, password, firstName, lastName, role } = req.body;
+    if (role !== undefined && !ADMIN_ROLES.includes(role)) {
+      return res_.error(res, `role must be one of: ${ADMIN_ROLES.join(', ')}`, 422);
+    }
     const existing = await prisma.adminUser.findUnique({ where: { email: email.toLowerCase() } });
     if (existing) return res_.error(res, 'Email already registered', 409);
 
-    const hash = await bcrypt.hash(password, 12);
+    const hash = await hashPassword(password);
     const admin = await prisma.adminUser.create({
       data: { id: uuid(), email: email.toLowerCase(), passwordHash: hash, firstName, lastName, role: role || 'SUPPORT' },
       select: { id: true, email: true, firstName: true, lastName: true, role: true, createdAt: true },
@@ -290,6 +318,20 @@ const createAdmin = async (req, res, next) => {
 const updateAdmin = async (req, res, next) => {
   try {
     const { firstName, lastName, role, isActive } = req.body;
+    if (role !== undefined && !ADMIN_ROLES.includes(role)) {
+      return res_.error(res, `role must be one of: ${ADMIN_ROLES.join(', ')}`, 422);
+    }
+    // Never leave the panel without an active SUPER_ADMIN
+    const target = await prisma.adminUser.findUnique({ where: { id: req.params.id }, select: { role: true, isActive: true } });
+    if (!target) return res_.error(res, 'Admin not found', 404);
+    const losesSuper = target.role === 'SUPER_ADMIN' &&
+      ((isActive !== undefined && !isActive) || (role !== undefined && role !== 'SUPER_ADMIN'));
+    if (losesSuper) {
+      const others = await prisma.adminUser.count({
+        where: { role: 'SUPER_ADMIN', isActive: true, id: { not: req.params.id } },
+      });
+      if (others === 0) return res_.error(res, 'At least one active SUPER_ADMIN is required', 409);
+    }
     const admin = await prisma.adminUser.update({
       where: { id: req.params.id },
       data: { ...(firstName !== undefined && { firstName }), ...(lastName !== undefined && { lastName }), ...(role !== undefined && { role }), ...(isActive !== undefined && { isActive }) },

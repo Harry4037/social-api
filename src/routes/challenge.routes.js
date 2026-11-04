@@ -19,4 +19,16 @@ r.post('/:id/join',  authenticate, [
   body('buddyId').optional().isUUID(),
 ], validate, ctrl.joinChallenge);
 
+// Complete the current station (live photo or a session's proof)
+r.post('/:id/proof', authenticate, [
+  body('proofImageUrl').optional().custom(require('../utils/mediaUrl').mediaUrlValidator),
+  body('sessionId').optional().isUUID(),
+  body('stationId').optional().isUUID(),
+], validate, ctrl.submitStationProof);
+
+// Buddy joins a station completion (collab badge)
+r.post('/:id/collab', authenticate, [
+  body('stationCompletionId').isUUID(),
+], validate, ctrl.addCollab);
+
 module.exports = r;

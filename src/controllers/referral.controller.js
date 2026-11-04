@@ -58,6 +58,12 @@ const applyCode = async (req, res, next) => {
 
     if (!code) return res_.error(res, 'Referral code required', 400);
 
+    // Only new accounts (first 7 days) can use a referral code
+    const me = await prisma.user.findUnique({ where: { id: userId }, select: { createdAt: true } });
+    if (!me || Date.now() - new Date(me.createdAt).getTime() > 7 * 24 * 3600e3) {
+      return res_.error(res, 'Referral codes can only be used in your first week', 400);
+    }
+
     // Find referral
     const ref = await prisma.referral.findUnique({
       where: { code: code.toUpperCase() },
@@ -77,31 +83,25 @@ const applyCode = async (req, res, next) => {
     if (alreadyUsed)
       return res_.error(res, 'You have already used a referral code', 400);
 
-    // Mark as completed
-    await prisma.referral.update({
-      where: { id: ref.id },
-      data: {
-        referredId: userId,
-        status:     'completed',
-        rewardGiven: true,
-      },
-    });
+    // Mark as completed — atomic, and referredId is UNIQUE, so parallel
+    // requests (or two codes at once) can only ever pay out once
+    let claimed = 0;
+    try {
+      const r = await prisma.referral.updateMany({
+        where: { id: ref.id, referredId: null },
+        // Reward is paid later, after the new user's first completed workout
+        data: { referredId: userId, status: 'pending', rewardGiven: false },
+      });
+      claimed = r.count;
+    } catch (e) {
+      if (e.code === 'P2002' || /Unique constraint|Duplicate entry/i.test(e.message)) claimed = 0;
+      else throw e;
+    }
+    if (!claimed) return res_.error(res, 'You have already used a referral code', 400);
 
-    // Give 50 tokens to BOTH users
-    await prisma.user.updateMany({
-      where: { id: { in: [ref.referrerId, userId] } },
-      data:  { chatTokens: { increment: 50 } },
-    });
-
-    // Notify referrer
-    const newUser = await prisma.user.findUnique({
-      where:  { id: userId },
-      select: { firstName: true },
-    });
-    const data = { name: newUser?.firstName || 'Someone' };
-    await notifSvc.create({ userId: ref.referrerId, type: 'token', title: 'Referral Bonus!', message: `${data.name} joined! +50 tokens added` });
-
-    return res_.success(res, null, '🎁 Referral applied! 50 tokens added to your account.');
+    // No instant tokens: fake sign-ups used to farm 50 tokens each.
+    return res_.success(res, { rewardPending: true },
+      '🎁 Code applied! You both get 50 tokens after your first completed workout.');
   } catch(e) { next(e); }
 };
 
@@ -118,7 +118,7 @@ const getStats = async (req, res, next) => {
         where: { referrerId: userId, status: 'completed' },
       }),
       prisma.referral.count({
-        where: { referrerId: userId, status: 'pending' },
+        where: { referrerId: userId, status: 'pending', referredId: { not: null } },
       }),
     ]);
 
@@ -131,4 +131,44 @@ const getStats = async (req, res, next) => {
   } catch(e) { next(e); }
 };
 
-module.exports = { getMyCode, applyCode, getStats };
+// Called when a user completes a workout: pays a pending referral (once)
+const rewardReferral = async (userId) => {
+  try {
+    // Only real people: the new user must have verified their email
+    const u = await prisma.user.findUnique({ where: { id: userId }, select: { emailVerified: true } });
+    if (!u?.emailVerified) return false;
+    const ref = await prisma.referral.findFirst({
+      where: { referredId: userId, rewardGiven: false },
+      select: { id: true, referrerId: true },
+    });
+    if (!ref) return false;
+    const claim = await prisma.referral.updateMany({
+      where: { id: ref.id, rewardGiven: false },
+      data:  { rewardGiven: true, status: 'completed' },
+    });
+    if (!claim.count) return false;
+    await prisma.user.updateMany({
+      where: { id: { in: [ref.referrerId, userId] } },
+      data:  { chatTokens: { increment: 50 } },
+    });
+    const newUser = await prisma.user.findUnique({ where: { id: userId }, select: { firstName: true } });
+    await notifSvc.create({ userId: ref.referrerId, type: 'token', title: 'Referral bonus! 🎁',
+      message: `${newUser?.firstName || 'Your friend'} finished their first workout — +50 tokens` });
+    await notifSvc.create({ userId, type: 'token', title: 'Referral bonus! 🎁',
+      message: 'First workout done — +50 tokens added' });
+    return true;
+  } catch (e) {
+    console.error('[rewardReferral]', e.message);
+    return false;
+  }
+};
+
+// After email verification: pay if they already finished a workout
+const rewardReferralIfEarned = async (userId) => {
+  const done = await prisma.workoutSession.count({
+    where: { status: 'completed', OR: [{ userId }, { buddyId: userId }] },
+  });
+  return done > 0 ? rewardReferral(userId) : false;
+};
+
+module.exports = { getMyCode, applyCode, getStats, rewardReferral, rewardReferralIfEarned };

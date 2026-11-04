@@ -3,13 +3,16 @@
 //  All website CMS endpoints
 //  Auth: JWT + role check middleware
 // ─────────────────────────────────────────────────────────
-const bcrypt = require('bcryptjs');
+const { hashPassword, verifyPassword } = require('../../utils/password');
 const jwt = require('jsonwebtoken');
 const { v4: uuid } = require('uuid');
 const prisma = require('../../config/db');
 const res_ = require('../../utils/response');
 
-const JWT_SECRET = process.env.JWT_SECRET || 'change_this_secret';
+// No hard-coded fallback: a known default secret lets anyone forge CMS tokens
+const JWT_SECRET = process.env.CMS_JWT_SECRET || process.env.ADMIN_JWT_SECRET;
+// CMS team roles that can be invited / assigned (no ADMIN / SUPER_ADMIN escalation)
+const CMS_ROLES = ['blog_editor', 'seo_manager', 'website_manager', 'custom'];
 
 // ── ROLE PERMISSION PRESETS ────────────────────────────────
 const ROLE_PRESETS = {
@@ -96,7 +99,7 @@ const login = async (req, res, next) => {
     if (admin.status === 'pending')
       return res_.error(res, 'Account not yet activated. Check your email.', 403);
 
-    const valid = await bcrypt.compare(password, admin.passwordHash);
+    const valid = (await verifyPassword(password, admin.passwordHash)).ok;
     if (!valid) return res_.error(res, 'Invalid credentials', 401);
 
     // Update lastActiveAt
@@ -149,6 +152,7 @@ const getTeam = async (req, res, next) => {
 const inviteMember = async (req, res, next) => {
   try {
     const { name, email, role = 'custom', permissions: perms } = req.body;
+    if (!CMS_ROLES.includes(role)) return res_.error(res, `role must be one of: ${CMS_ROLES.join(', ')}`, 422);
 
     if (!name || !email)
       return res_.error(res, 'Name and email required', 422);
@@ -162,7 +166,7 @@ const inviteMember = async (req, res, next) => {
 
     // Temp password — user sets own via invite link
     const tempPass = Math.random().toString(36).slice(-10);
-    const hash = await bcrypt.hash(tempPass, 10);
+    const hash = await hashPassword(tempPass);
 
     // Build permissions from preset or custom
     const permData = role !== 'custom' && ROLE_PRESETS[role]
@@ -195,6 +199,12 @@ const inviteMember = async (req, res, next) => {
 const updateMember = async (req, res, next) => {
   try {
     const { role, status, permissions: perms } = req.body;
+    if (role !== undefined && !CMS_ROLES.includes(role)) {
+      return res_.error(res, `role must be one of: ${CMS_ROLES.join(', ')}`, 422);
+    }
+    if (status !== undefined && !['active', 'pending', 'revoked'].includes(status)) {
+      return res_.error(res, 'Invalid status', 422);
+    }
     const { id } = req.params;
 
     const target = await prisma.adminUser.findUnique({ where: { id } });
@@ -243,9 +253,11 @@ const revokeMember = async (req, res, next) => {
     if (target.role === 'super_admin')
       return res_.error(res, 'Cannot revoke super admin', 403);
 
+    // isActive:false is what admin login + adminAuth check — 'revoked' alone
+    // left the member's token (and future logins) working
     await prisma.adminUser.update({
       where: { id: req.params.id },
-      data: { status: 'revoked' },
+      data: { status: 'revoked', isActive: false },
     });
     return res_.success(res, {}, 'Access revoked');
   } catch (e) { next(e); }
@@ -291,8 +303,8 @@ const getArticles = async (req, res, next) => {
 // GET /cms/blog/:id
 const getArticle = async (req, res, next) => {
   try {
-    const article = await prisma.blogArticle.findUnique({
-      where: { id: req.params.id },
+    const article = await prisma.blogArticle.findFirst({
+      where: { id: req.params.id, ...(req.publicOnly ? { status: 'published' } : {}) },
       include: { author: { select: { id: true, name: true } } },
     });
     if (!article) return res_.error(res, 'Article not found', 404);

@@ -16,11 +16,12 @@ const authenticate = async (req, res, next) => {
       where: { id: payload.sub },
       select: {
         id: true, email: true, status: true, isBanned: true,
-        subscriptionPlan: true, chatTokens: true, lastActiveAt: true,
+        subscriptionPlan: true, subscriptionExpiry: true, chatTokens: true, lastActiveAt: true,
+        deletedAt: true,
       },
     });
 
-    if (!user)           return error(res, 'User not found', 401);
+    if (!user || user.deletedAt) return error(res, 'User not found', 401);
     if (user.isBanned)   return error(res, 'Account suspended', 403);
     if (user.status === 'BANNED') return error(res, 'Account banned', 403);
 
@@ -31,6 +32,16 @@ const authenticate = async (req, res, next) => {
     if (!user.lastActiveAt || Date.now() - new Date(user.lastActiveAt).getTime() > ACTIVE_WRITE_MS) {
       prisma.user.update({ where: { id: user.id }, data: { lastActiveAt: new Date() } })
         .catch(() => {});
+    }
+
+    // Paid plan ran out → back to free (nothing else ever checked the expiry)
+    if (user.subscriptionPlan !== 'free' && user.subscriptionExpiry &&
+        new Date(user.subscriptionExpiry) < new Date()) {
+      await prisma.user.updateMany({
+        where: { id: user.id, subscriptionExpiry: { lt: new Date() } },
+        data:  { subscriptionPlan: 'free' },
+      });
+      user.subscriptionPlan = 'free';
     }
 
     req.user = user;

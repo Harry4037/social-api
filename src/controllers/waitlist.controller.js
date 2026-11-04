@@ -224,13 +224,19 @@ const exportCsv = async (req, res, next) => {
       orderBy: { position: 'asc' },
     });
 
+    // Quote every field and neutralise spreadsheet formulas (=, +, -, @)
+    // — a waitlist name like =HYPERLINK(...) would run in Excel otherwise
+    const cell = (v) => {
+      let t = v == null ? '' : String(v);
+      if (/^[=+\-@\t\r]/.test(t)) t = "'" + t;
+      return `"${t.replace(/"/g, '""')}"`;
+    };
     const csv = [
       'Position,Name,Email,City,Country,Activity,Source,Joined',
-      ...entries.map(e =>
-        `${e.position},${e.name},${e.email},${e.city},`+
-        `${e.country},${e.activity || ''},${e.source},`+
-        `${new Date(e.createdAt).toLocaleDateString('en-IN')}`
-      ),
+      ...entries.map(e => [
+        e.position, e.name, e.email, e.city, e.country, e.activity || '', e.source,
+        new Date(e.createdAt).toLocaleDateString('en-IN'),
+      ].map(cell).join(',')),
     ].join('\n');
 
     res.setHeader('Content-Type', 'text/csv');

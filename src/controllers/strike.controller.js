@@ -224,19 +224,17 @@ const expireStrikes = async () => {
 
 // ── STREAK WARNING (called by CRON daily 9 PM IST) ───────
 const sendStreakWarnings = async () => {
-  // Find active matches with streaks where no strike sent today
-  const midnight = new Date();
-  midnight.setHours(23, 59, 59, 999);
-  const startOfDay = new Date();
-  startOfDay.setHours(0, 0, 0, 0);
+  // Streaks that have NOT gone up today (IST day) — they break tonight
+  const { dayBounds } = require('./session.controller');
+  const startOfDay = dayBounds(new Date()).start;
 
   const matchesAtRisk = await prisma.match.findMany({
     where: {
       buddyStrikeStreak: { gt: 0 },
       status: 'active',
       OR: [
-        { lastStrikeAt: null },
-        { lastStrikeAt: { lt: startOfDay } },
+        { streakCountedAt: null },
+        { streakCountedAt: { lt: startOfDay } },
       ],
     },
     select: {
@@ -253,12 +251,12 @@ const sendStreakWarnings = async () => {
   for (const match of matchesAtRisk) {
     // Warn both users
     await _notify(match.userAId,
-      `🔥 Send a Strike to ${match.userB.firstName} before midnight!`,
+      `🔥 ${match.buddyStrikeStreak}-day streak with ${match.userB.firstName} ends at midnight — send a Strike!`,
       'streak_warning',
       { matchId: match.id, streak: match.buddyStrikeStreak }
     );
     await _notify(match.userBId,
-      `🔥 Send a Strike to ${match.userA.firstName} before midnight!`,
+      `🔥 ${match.buddyStrikeStreak}-day streak with ${match.userA.firstName} ends at midnight — send a Strike!`,
       'streak_warning',
       { matchId: match.id, streak: match.buddyStrikeStreak }
     );
@@ -283,12 +281,16 @@ const _checkAndUpdateStreak = async (match, senderId, receiverId) => {
   });
 
   if (otherStrike) {
-    // Both sent → streak continues
-    const newStreak = match.buddyStrikeStreak + 1;
-    await prisma.match.update({
-      where: { id: match.id },
-      data:  { buddyStrikeStreak: newStreak },
+    // Both sent → streak continues, but at most +1 per day (two accounts
+    // could hit the 7/30-day XP milestones in minutes before)
+    const { dayBounds } = require('./session.controller');
+    const today = dayBounds(now).start;
+    const claim = await prisma.match.updateMany({
+      where: { id: match.id, OR: [{ streakCountedAt: null }, { streakCountedAt: { lt: today } }] },
+      data:  { buddyStrikeStreak: { increment: 1 }, streakCountedAt: now },
     });
+    if (claim.count === 0) return { streak: match.buddyStrikeStreak, increased: false };
+    const newStreak = match.buddyStrikeStreak + 1;
 
     // Milestone XP + Trust rewards
     if (newStreak === 7) {
@@ -307,23 +309,53 @@ const _checkAndUpdateStreak = async (match, senderId, receiverId) => {
 };
 
 // ── INTERNAL: Create notification ────────────────────────
-const _notify = async (userId, message, type, data = {}) => {
-  try {
-    await prisma.notification.create({
-      data: {
-        id:     require('crypto').randomUUID(),
-        userId,
-        type,
-        title:  message,
-        message: message,
-        data:   JSON.stringify(data),
-        isRead: false,
-      },
-    });
-  } catch (_) {}
+// Uses the notification service (valid type, push, quiet hours, daily cap)
+const _notify = (userId, message, kind, data = {}) =>
+  require('../services/notification.service').notifyKind(userId, kind, message, data).catch(() => null);
+
+// ── CRON (00:05 IST): break streaks that missed a whole day ──
+// Pro/Elite pairs get one automatic "streak freeze" every 30 days.
+const breakStrikeStreaks = async () => {
+  const { dayBounds } = require('./session.controller');
+  const yesterdayStart = new Date(dayBounds(new Date()).start.getTime() - 24 * 3600e3);
+  const now = new Date();
+  const missed = await prisma.match.findMany({
+    where: {
+      buddyStrikeStreak: { gt: 0 },
+      OR: [{ streakCountedAt: null }, { streakCountedAt: { lt: yesterdayStart } }],
+    },
+    select: {
+      id: true, buddyStrikeStreak: true, streakFreezeUsedAt: true, userAId: true, userBId: true,
+      userA: { select: { firstName: true, subscriptionPlan: true } },
+      userB: { select: { firstName: true, subscriptionPlan: true } },
+    },
+    take: 5000,
+  });
+  let broken = 0, frozen = 0;
+  for (const m of missed) {
+    const pro = [m.userA, m.userB].some(u => u && u.subscriptionPlan !== 'free');
+    const freezeFree = !m.streakFreezeUsedAt || now - new Date(m.streakFreezeUsedAt) > 30 * 24 * 3600e3;
+    if (pro && freezeFree) {
+      // keep the streak: pretend it counted yesterday
+      await prisma.match.update({ where: { id: m.id }, data: {
+        streakFreezeUsedAt: now, streakCountedAt: new Date(yesterdayStart.getTime() + 60e3) } });
+      for (const uid of [m.userAId, m.userBId]) {
+        await _notify(uid, `🧊 Streak freeze used — your ${m.buddyStrikeStreak}-day streak is safe`, 'streak_warning', { matchId: m.id });
+      }
+      frozen++;
+      continue;
+    }
+    await prisma.match.update({ where: { id: m.id }, data: { buddyStrikeStreak: 0 } });
+    for (const uid of [m.userAId, m.userBId]) {
+      await _notify(uid, `💔 Your ${m.buddyStrikeStreak}-day streak ended. Send a Strike to start a new one!`, 'streak_warning', { matchId: m.id });
+    }
+    broken++;
+  }
+  return { broken, frozen };
 };
 
 module.exports = {
+  breakStrikeStreaks,
   sendStrike,
   viewStrike,
   reactToStrike,

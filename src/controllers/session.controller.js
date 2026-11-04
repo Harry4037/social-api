@@ -41,7 +41,7 @@ const formatSession = (s, currentUserId = null) => ({
   scheduledAt: s.scheduledAt,
   durationMins: s.durationMins,
   endTime: s.endTime,
-  // Session status: scheduled | completed | missed
+  // Session status: scheduled | completed | missed | cancelled
   status: s.status,
   // Invite status from SessionParticipant: pending | confirmed | declined
   inviteStatus: currentUserId
@@ -63,15 +63,30 @@ const formatSession = (s, currentUserId = null) => ({
   challengeId: s.challengeId,
   challengeTitle: s.challenge?.title ?? null,
   chatId: s.chatId,
+  onMyWay: Array.isArray(s.onMyWay) ? s.onMyWay : [],
   participants: (s.participants ?? []).map(p => ({
     id: p.id,
     userId: p.userId,
     name: `${p.user.firstName} ${p.user.lastName}`,
     avatarUrl: p.user.avatarUrl,
-    status: p.status,           // pending | confirmed | declined
+    status: p.status,           // pending | confirmed | declined | expired
   })),
   createdAt: s.createdAt,
 });
+
+const SOLO_PER_DAY = Number(process.env.SOLO_SESSIONS_PER_DAY) || 2;
+const MAX_DAYS_AHEAD = 30;
+const MAX_PENDING_PER_BUDDY = 3;
+
+// Calendar-day bounds of `date` in the app's time zone.
+// APP_TZ_OFFSET_MIN = minutes east of UTC (IST = 330, the default).
+const dayBounds = (date) => {
+  const off = (Number(process.env.APP_TZ_OFFSET_MIN ?? 330)) * 60 * 1000;
+  const local = new Date(date.getTime() + off);
+  local.setUTCHours(0, 0, 0, 0);
+  const start = new Date(local.getTime() - off);
+  return { start, end: new Date(start.getTime() + 24 * 60 * 60 * 1000 - 1) };
+};
 
 // ── POST /sessions ─────────────────────────────────────────
 const scheduleSession = async (req, res, next) => {
@@ -95,6 +110,16 @@ const scheduleSession = async (req, res, next) => {
     const dt = new Date(scheduledAt);
     if (isNaN(dt) || dt < new Date()) {
       return res_.error(res, 'scheduledAt must be a future date', 422);
+    }
+    if (dt.getTime() - Date.now() > MAX_DAYS_AHEAD * 24 * 3600e3) {
+      return res_.error(res, `You can plan sessions up to ${MAX_DAYS_AHEAD} days ahead`, 422);
+    }
+    // Linked challenge must be one I'm actually in (any id used to 500)
+    if (challengeId) {
+      const entry = await prisma.challengeEntry.findFirst({
+        where: { challengeId, userId: req.user.id, status: 'active' }, select: { id: true },
+      });
+      if (!entry) return res_.error(res, 'Join this challenge first', 422);
     }
 
     // Calculate endTime
@@ -140,6 +165,16 @@ const scheduleSession = async (req, res, next) => {
           403
         );
       }
+      // Max pending invites to one buddy (invite spam)
+      const pending = await prisma.sessionParticipant.count({
+        where: {
+          userId: bId, status: 'pending',
+          session: { userId: req.user.id, status: 'scheduled', scheduledAt: { gt: new Date() } },
+        },
+      });
+      if (pending >= MAX_PENDING_PER_BUDDY) {
+        return res_.error(res, 'Wait for your buddy to answer your other invites first', 429);
+      }
       validatedBuddyIds.push(bId);
     }
 
@@ -152,13 +187,29 @@ const scheduleSession = async (req, res, next) => {
     const primaryBuddyId = validatedBuddyIds[0] ?? null;
     const isGroup = validatedBuddyIds.length > 1;
 
+    // ── Solo sessions: max SOLO_PER_DAY per day (each one pays XP) ──
+    if (validatedBuddyIds.length === 0) {
+      const { start, end } = dayBounds(dt);
+      const soloCount = await prisma.workoutSession.count({
+        where: {
+          userId: req.user.id, buddyId: null,
+          scheduledAt: { gte: start, lte: end },
+          status: { in: ['scheduled', 'completed'] },
+          participants: { none: {} },
+        },
+      });
+      if (soloCount >= SOLO_PER_DAY) {
+        return res_.error(res, `You can log up to ${SOLO_PER_DAY} solo sessions a day`, 429);
+      }
+    }
+
     // ── Same-day duplicate check ─────────────────────────
     // Only one session allowed per buddy pair per day
     if (validatedBuddyIds.length > 0) {
-      const todayStart = new Date();
-      todayStart.setHours(0, 0, 0, 0);
-      const todayEnd = new Date();
-      todayEnd.setHours(23, 59, 59, 999);
+      // The session's own calendar day in the app's time zone (IST by default) —
+      // before, this compared against *today*, so two sessions on the same
+      // future day with the same buddy were allowed.
+      const { start: todayStart, end: todayEnd } = dayBounds(dt);
 
       for (const bId of validatedBuddyIds) {
         const existing = await prisma.workoutSession.findFirst({
@@ -179,7 +230,7 @@ const scheduleSession = async (req, res, next) => {
           });
           return res_.error(
             res,
-            `You already have a session scheduled with ${buddy?.firstName ?? 'this buddy'} today. You can book again tomorrow!`,
+            `You already have a session with ${buddy?.firstName ?? 'this buddy'} on that day. Pick another day!`,
             409
           );
         }
@@ -277,6 +328,7 @@ const scheduleSession = async (req, res, next) => {
             senderId: req.user.id,
             content: `${myName} invited you to a ${activity} session on ${dt.toDateString()}`,
             type: 'session_invite',
+            sessionId: session.id,
             metadata: inviteMetadata,
           },
         });
@@ -297,30 +349,42 @@ const getMySessions = async (req, res, next) => {
     const take = 20;
     const skip = (Number(page) - 1) * take;
 
-    const where = {
-      OR: [
-        { userId: req.user.id },
-        { buddyId: req.user.id },
-        {
-          participants: { some: { userId: req.user.id } },
-        },
-      ],
-      ...(status ? { status } : {}),
-    };
+    // Three indexed lookups (host / buddy / invited) merged in memory — one
+    // OR + EXISTS query read the whole sessions table (1000-user load test).
+    const myId = req.user.id;
+    const st = status ? { status } : {};
+    const n = skip + take;
+    const pick = { id: true, scheduledAt: true };
+    const [asHost, asBuddy, asGuest] = await Promise.all([
+      prisma.workoutSession.findMany({ where: { userId: myId, ...st }, select: pick, orderBy: { scheduledAt: 'desc' }, take: n }),
+      prisma.workoutSession.findMany({ where: { buddyId: myId, ...st }, select: pick, orderBy: { scheduledAt: 'desc' }, take: n }),
+      prisma.sessionParticipant.findMany({
+        where: { userId: myId, session: st }, select: { session: { select: pick } },
+        orderBy: { session: { scheduledAt: 'desc' } }, take: n,
+      }).then(rows => rows.map(r => r.session)),
+    ]);
+    const seen = new Map();
+    for (const r of [...asHost, ...asBuddy, ...asGuest]) seen.set(r.id, r);
+    const pageIds = [...seen.values()]
+      .sort((x, y) => new Date(y.scheduledAt) - new Date(x.scheduledAt) || (x.id < y.id ? -1 : 1))
+      .slice(skip, skip + take).map(r => r.id);
 
-    const sessions = await prisma.workoutSession.findMany({
-      where,
+    const sessions = pageIds.length ? await prisma.workoutSession.findMany({
+      where: { id: { in: pageIds } },
       orderBy: { scheduledAt: 'desc' },
-      take,
-      skip,
       ...SESSION_INCLUDE,
-    });
+    }) : [];
 
     return res_.success(res, { sessions: sessions.map(s => formatSession(s, req.user.id)) });
   } catch (e) { next(e); }
 };
 
 // ── POST /sessions/:id/respond — Confirm or Decline invite ─
+// Rules:
+//  • only an invited participant can answer, and only once
+//  • only BEFORE the session starts (after that the invite has expired)
+//  • the chat invite card is updated for everyone (socket "message:updated")
+//  • 1:1 invite declined → session cancelled (nobody is penalised)
 const respondToInvite = async (req, res, next) => {
   try {
     const { action } = req.body; // 'confirm' | 'decline'
@@ -334,38 +398,224 @@ const respondToInvite = async (req, res, next) => {
     });
     if (!session) return res_.error(res, 'Session not found', 404);
 
-    // Update participant status
-    const participant = await prisma.sessionParticipant.findFirst({
-      where: { sessionId: session.id, userId: req.user.id },
-    });
-    if (!participant) return res_.error(res, 'You are not invited to this session', 403);
-
-    await prisma.sessionParticipant.update({
-      where: { id: participant.id },
-      data: {
-        status: action === 'confirm' ? 'confirmed' : 'declined',
-        respondedAt: new Date(),
-      },
-    });
-
-    // If declined → notify creator, session stays 'scheduled'
-    if (action === 'decline') {
-      await notifSvc.create({ userId: session.userId, type: 'session', title: 'Session Invite Declined', message: 'A buddy declined your session invite.', data: { sessionId: session.id } });
-      return res_.success(res, {}, 'Session declined');
+    const participant = session.participants.find(p => p.userId === req.user.id);
+    if (!participant || session.userId === req.user.id) {
+      return res_.error(res, 'You are not invited to this session', 403);
+    }
+    if (participant.status !== 'pending') {
+      return res_.error(res, `You already ${participant.status === 'expired' ? 'missed' : participant.status} this invite`, 409,
+        { inviteStatus: participant.status });
+    }
+    if (session.status !== 'scheduled' || new Date(session.scheduledAt) <= new Date()) {
+      await _expireParticipant(participant.id);
+      await _updateInviteCard(req, session.id, { status: 'expired' });
+      return res_.error(res, 'This invite has expired — the session start time has passed', 410,
+        { inviteStatus: 'expired' });
     }
 
-    // If confirmed → check if all participants confirmed
-    const pending = await prisma.sessionParticipant.count({
-      where: { sessionId: session.id, status: 'pending' },
+    const newStatus = action === 'confirm' ? 'confirmed' : 'declined';
+    // Atomic: only flips a still-pending row (double tap / two devices)
+    const claim = await prisma.sessionParticipant.updateMany({
+      where: { id: participant.id, status: 'pending' },
+      data:  { status: newStatus, respondedAt: new Date() },
     });
+    if (claim.count === 0) return res_.error(res, 'You already answered this invite', 409);
 
-    if (pending === 0) {
-      // All confirmed — notify creator
-      await notifSvc.create({ userId: session.userId, type: 'session', title: 'Session Confirmed', message: 'Your session was confirmed!', data: { sessionId: session.id } });
+    const me = await prisma.user.findUnique({ where: { id: req.user.id }, select: { firstName: true } });
+    const name = me?.firstName || 'Your buddy';
+
+    // Who is still in?
+    const others = session.participants.filter(p => p.userId !== session.userId && p.id !== participant.id);
+    const anyConfirmed = newStatus === 'confirmed' || others.some(p => p.status === 'confirmed');
+    const anyPending   = others.some(p => p.status === 'pending');
+
+    if (newStatus === 'declined') {
+      // Not coming → leave the session's group chat
+      if (session.chatId) {
+        await prisma.chatMember.deleteMany({ where: { chatId: session.chatId, userId: req.user.id } });
+      }
+      if (!anyConfirmed && !anyPending) {
+        await prisma.workoutSession.update({
+          where: { id: session.id },
+          data:  { status: 'cancelled', incompleteReason: 'Invite declined' },
+        });
+      }
+      await _updateInviteCard(req, session.id, { status: 'declined' }, req.user.id);
+      await notifSvc.create({
+        userId: session.userId, type: 'session',
+        title: 'Session invite declined',
+        message: `${name} can't make it to your ${session.activity} session.`,
+        data: { sessionId: session.id },
+      });
+      return res_.success(res, { inviteStatus: 'declined' }, 'Session declined');
     }
 
-    return res_.success(res, {}, 'Response recorded');
+    await _updateInviteCard(req, session.id, { status: 'confirmed' }, req.user.id);
+    await notifSvc.create({
+      userId: session.userId, type: 'session',
+      title: 'Session confirmed 🤝',
+      message: `${name} confirmed your ${session.activity} session.`,
+      data: { sessionId: session.id },
+    });
+    return res_.success(res, { inviteStatus: 'confirmed' }, 'Response recorded');
   } catch (e) { next(e); }
+};
+
+const _expireParticipant = (participantId) =>
+  prisma.sessionParticipant.updateMany({
+    where: { id: participantId, status: 'pending' },
+    data:  { status: 'expired', respondedAt: new Date() },
+  });
+
+// Update the session_invite chat card(s) and tell open chats right away.
+// `responderId` → also record per-person answers for group invites.
+const _updateInviteCard = async (reqOrNull, sessionId, patch, responderId = null) => {
+  try {
+    const cards = await prisma.message.findMany({
+      where: { sessionId, type: 'session_invite' },
+    });
+    const io = reqOrNull?.app?.get?.('io') || _io;
+    for (const m of cards) {
+      const meta = { ...(m.metadata || {}) };
+      if (responderId) meta.responses = { ...(meta.responses || {}), [responderId]: patch.status };
+      Object.assign(meta, patch);
+      const updated = await prisma.message.update({ where: { id: m.id }, data: { metadata: meta } });
+      if (io) {
+        io.to(`chat:${m.chatId}`).emit('message:updated', {
+          id: updated.id, chatId: updated.chatId, metadata: updated.metadata,
+        });
+      }
+    }
+  } catch (e) {
+    console.error('[_updateInviteCard]', e.message); // never block the response
+  }
+};
+
+// Socket server for cron jobs (no req). Set once from server.js.
+let _io = null;
+const setIo = (io) => { _io = io; };
+
+// ── POST /sessions/:id/on-my-way ───────────────────────────
+// Lets the others know you're coming. From 90 min before the start until the
+// session ends, once per person; only the host and confirmed people.
+const ON_MY_WAY_BEFORE_MS = 90 * 60 * 1000;
+const onMyWay = async (req, res, next) => {
+  try {
+    const myId = req.user.id;
+    const session = await prisma.workoutSession.findFirst({
+      where: { id: req.params.id, OR: [
+        { userId: myId }, { buddyId: myId }, { participants: { some: { userId: myId } } },
+      ] },
+      include: { participants: true, user: { select: { firstName: true } } },
+    });
+    if (!session) return res_.error(res, 'Session not found', 404);
+    const isHost = session.userId === myId;
+    const mine = session.participants.find(p => p.userId === myId);
+    if (!isHost && (!mine || mine.status !== 'confirmed')) {
+      return res_.error(res, 'Confirm the session first', 403);
+    }
+    if (session.status !== 'scheduled') return res_.error(res, 'This session is not active', 400);
+    const now = Date.now();
+    if (now < new Date(session.scheduledAt).getTime() - ON_MY_WAY_BEFORE_MS) {
+      return res_.error(res, 'You can say "On my way" from 90 minutes before the start', 400);
+    }
+    if (now > new Date(session.endTime).getTime()) return res_.error(res, 'This session is over', 400);
+
+    // Optimistic lock on updatedAt. In a group several people tap at the
+    // same moment → re-read and retry instead of failing (load test).
+    let cur = session, list = [], saved = false;
+    for (let attempt = 0; attempt < 8 && !saved; attempt++) {
+      if (attempt) {
+        await new Promise(r => setTimeout(r, 15 + Math.random() * 40 * attempt));
+        cur = await prisma.workoutSession.findUnique({ where: { id: session.id }, select: { onMyWay: true, updatedAt: true } });
+      }
+      list = Array.isArray(cur.onMyWay) ? cur.onMyWay : [];
+      if (list.includes(myId)) return res_.error(res, 'You already said you are on your way', 409);
+      const upd = await prisma.workoutSession.updateMany({
+        where: { id: session.id, updatedAt: cur.updatedAt },
+        data: { onMyWay: [...list, myId] },
+      });
+      saved = upd.count === 1;
+    }
+    if (!saved) return res_.error(res, 'Please try again', 503);
+
+    const me = await prisma.user.findUnique({ where: { id: myId }, select: { firstName: true } });
+    const name = me?.firstName || 'Your buddy';
+    const others = new Set([session.userId, session.buddyId, ...session.participants
+      .filter(p => p.status === 'confirmed').map(p => p.userId)].filter(Boolean));
+    others.delete(myId);
+    for (const uid of others) {
+      await notifSvc.create({
+        userId: uid, type: 'session', title: `${name} is on the way 🏃`,
+        message: `${name} is heading to ${session.gymName || 'your'} ${session.activity} session.`,
+        data: { sessionId: session.id },
+      });
+    }
+    // System line in the session chat (group chat, or the 1:1 chat)
+    try {
+      let chatId = session.chatId;
+      if (!chatId && others.size === 1) {
+        const other = [...others][0];
+        const chat = await prisma.chat.findFirst({ where: { isGroup: false, OR: [
+          { userAId: myId, userBId: other }, { userAId: other, userBId: myId }] } });
+        chatId = chat?.id;
+      }
+      if (chatId) {
+        const content = `🏃 ${name} is on the way`;
+        const msg = await prisma.message.create({ data: {
+          id: uuid(), chatId, senderId: myId, content, type: 'system',
+          metadata: { kind: 'on_my_way', sessionId: session.id } } });
+        await prisma.chat.update({ where: { id: chatId }, data: { lastMessage: content, lastMessageAt: new Date() } });
+        const io = req.app.get('io') || _io;
+        if (io) io.to(`chat:${chatId}`).emit('message:new', {
+          id: msg.id, chatId, senderId: myId, senderName: name, content, type: 'system',
+          isRead: false, metadata: msg.metadata, createdAt: msg.createdAt });
+      }
+    } catch (e) { console.error('[onMyWay chat]', e.message); }
+    return res_.success(res, { onMyWay: [...list, myId] }, 'Your buddy knows you are coming');
+  } catch (e) { next(e); }
+};
+
+// ── CRON: invites nobody answered before the start time ──
+// Pending → 'expired'. If no invitee confirmed, the session is cancelled
+// (no Trust/Token penalty — nobody agreed to train).
+const expireUnansweredInvites = async () => {
+  const now = new Date();
+  const sessions = await prisma.workoutSession.findMany({
+    where: {
+      status: 'scheduled',
+      scheduledAt: { lte: now },
+      participants: { some: { status: 'pending' } },
+    },
+    include: { participants: true },
+    take: 500,
+  });
+  let expired = 0, cancelled = 0;
+  for (const s of sessions) {
+    const r = await prisma.sessionParticipant.updateMany({
+      where: { sessionId: s.id, status: 'pending' },
+      data:  { status: 'expired', respondedAt: now },
+    });
+    expired += r.count;
+    const invitees = s.participants.filter(p => p.userId !== s.userId);
+    const anyConfirmed = invitees.some(p => p.status === 'confirmed');
+    if (!anyConfirmed) {
+      await prisma.workoutSession.updateMany({
+        where: { id: s.id, status: 'scheduled' },
+        data:  { status: 'cancelled', incompleteReason: 'Invite not accepted before start time' },
+      });
+      cancelled++;
+      await _updateInviteCard(null, s.id, { status: 'expired' });
+      await notifSvc.create({
+        userId: s.userId, type: 'session',
+        title: 'Session invite expired',
+        message: `Your ${s.activity} invite wasn't accepted in time. Plan another one?`,
+        data: { sessionId: s.id },
+        push: false,
+      }).catch(() => {});
+    }
+  }
+  return { expired, cancelled };
 };
 
 // ── POST /sessions/:id/proof ───────────────────────────────
@@ -388,9 +638,36 @@ const uploadProof = async (req, res, next) => {
     if (session.status !== 'scheduled' || session.proofUploadedAt) {
       return res_.error(res, 'Proof already submitted for this session', 409);
     }
+    // Only the creator or someone who ACCEPTED the invite can upload proof
+    if (session.userId !== myId) {
+      const me = session.participants.find(p => p.userId === myId);
+      if (!me || me.status !== 'confirmed') {
+        return res_.error(res, 'Accept the session invite before uploading proof', 403);
+      }
+    }
+    // A buddy session needs the buddy to have accepted
+    if (session.buddyId && session.participants.length &&
+        !session.participants.some(p => p.userId !== session.userId && p.status === 'confirmed')) {
+      return res_.error(res, 'Your buddy has not accepted this session', 409);
+    }
 
     const { proofImageUrl } = req.body;
     if (!proofImageUrl) return res_.error(res, 'proofImageUrl is required', 422);
+    // Must be a photo this user uploaded in the last 24h, never used before
+    const { isOwnUpload } = require('../utils/mediaUrl');
+    if (!(await isOwnUpload(myId, proofImageUrl, { maxAgeHours: 24 }))) {
+      return res_.error(res, 'Take the proof photo with the in-app camera', 422);
+    }
+    // The photo must be taken DURING / AFTER this workout (10 min grace) —
+    // a picture from yesterday's gym visit doesn't count
+    const fresh = await isOwnUpload(myId, proofImageUrl, {
+      after: new Date(new Date(session.scheduledAt).getTime() - 10 * 60 * 1000),
+    });
+    if (!fresh) return res_.error(res, 'This photo was taken before the session started — take a new one', 422);
+    const reused = await prisma.workoutSession.findFirst({
+      where: { proofUploadedBy: myId, proofImageUrl, id: { not: session.id } }, select: { id: true },
+    });
+    if (reused) return res_.error(res, 'This photo was already used for another session', 409);
 
     const now = new Date();
     const endTime = new Date(session.endTime);
@@ -420,8 +697,9 @@ const uploadProof = async (req, res, next) => {
     // ── SOLO: complete immediately + actually award XP ──
     if (!isBuddySession) {
       const SOLO_XP = 50;
-      await prisma.workoutSession.update({
-        where: { id: session.id },
+      // Atomic claim — two quick taps used to pay the XP twice
+      const claim = await prisma.workoutSession.updateMany({
+        where: { id: session.id, status: 'scheduled', proofUploadedAt: null },
         data: {
           proofImageUrl,
           proofUploadedAt: now,
@@ -430,8 +708,10 @@ const uploadProof = async (req, res, next) => {
           xpEarned: SOLO_XP,
         },
       });
+      if (claim.count === 0) return res_.error(res, 'Proof already submitted for this session', 409);
       // Previously only "50" was written on the session — the user never got it.
       await xpCtrl.awardXP(myId, SOLO_XP, 'session_complete_solo', { sessionId: session.id });
+      await require('./referral.controller').rewardReferral(myId);
 
       const updated = await prisma.workoutSession.findFirst({
         where: { id: session.id }, ...SESSION_INCLUDE,
@@ -440,16 +720,17 @@ const uploadProof = async (req, res, next) => {
     }
 
     // ── BUDDY: other person must confirm within 2h ──
-    const updated = await prisma.workoutSession.update({
-      where: { id: session.id },
+    const claim = await prisma.workoutSession.updateMany({
+      where: { id: session.id, status: 'scheduled', proofUploadedAt: null },
       data: {
         proofImageUrl,
         proofUploadedAt: now,
         proofUploadedBy: myId,
         confirmReminders: 1, // reminder #1 = the notification below
       },
-      ...SESSION_INCLUDE,
     });
+    if (claim.count === 0) return res_.error(res, 'Proof already submitted for this session', 409);
+    const updated = await prisma.workoutSession.findUnique({ where: { id: session.id }, ...SESSION_INCLUDE });
 
     const confirmerId  = _confirmerOf(updated);
     const uploaderName = _firstName(updated, myId) || 'Your buddy';
@@ -598,6 +879,7 @@ const processProofConfirmations = async () => {
         await xpCtrl.awardXP(uploaderId, baseXp, 'session_complete_unconfirmed', { sessionId: s.id });
         await xpCtrl.updateTrust(uploaderId, 2.0, 'session_complete');
         await xpCtrl.awardToken(uploaderId, 1, 'session_complete');
+        await require('./referral.controller').rewardReferral(uploaderId);
 
         // Confirmer loses their share + trust -2
         await xpCtrl.updateTrust(confirmerId, -2.0, 'proof_confirm_missed');
@@ -683,7 +965,7 @@ const _postProofCard = async (req, session, uploaderId, confirmerId, deadline, p
     });
     if (!chat) return;
 
-    const content = '📸 Session proof — confirm karo';
+    const content = '📸 Session proof — tap to confirm';
     const message = await prisma.message.create({
       data: {
         id: uuid(),
@@ -691,6 +973,7 @@ const _postProofCard = async (req, session, uploaderId, confirmerId, deadline, p
         senderId: uploaderId,
         content,
         type: 'proof',
+        sessionId: session.id,
         metadata: {
           sessionId:   session.id,
           imageUrl:    session.proofImageUrl,
@@ -728,7 +1011,7 @@ const _postProofCard = async (req, session, uploaderId, confirmerId, deadline, p
 const _updateProofCard = async (sessionId, status) => {
   try {
     const cards = await prisma.message.findMany({
-      where: { type: 'proof', metadata: { path: '$.sessionId', equals: sessionId } },
+      where: { sessionId, type: 'proof' },
     });
     for (const m of cards) {
       await prisma.message.update({
@@ -739,6 +1022,27 @@ const _updateProofCard = async (sessionId, status) => {
   } catch (e) {
     console.error('[_updateProofCard]', e.message);
   }
+};
+
+// ── CRON (every 30 min): "upload your proof" — once per session ──
+// Sessions that ENDED in the last 30 minutes (the cron runs every 30, so each
+// session is picked up exactly once), no proof yet, still scheduled.
+// Sent to the host and every confirmed person (any of them may upload).
+const sendProofReminders = async (now = new Date()) => {
+  const sessions = await prisma.workoutSession.findMany({
+    where: {
+      status: 'scheduled', proofUploadedAt: null,
+      endTime: { gt: new Date(now.getTime() - 30 * 60 * 1000), lte: now },
+    },
+    select: { id: true, userId: true, buddyId: true, participants: { where: { status: 'confirmed' }, select: { userId: true } } },
+  });
+  let sent = 0;
+  for (const s of sessions) {
+    const people = new Set([s.userId, ...s.participants.map(p => p.userId)]);
+    if (s.buddyId && !s.participants.length) people.add(s.buddyId); // old 2-person sessions
+    for (const uid of people) { await notifSvc.notifyProofRequired(uid, s.id); sent++; }
+  }
+  return { sessions: sessions.length, sent };
 };
 
 // ── CRON: Mark sessions incomplete ────────────────────────
@@ -756,21 +1060,40 @@ const markIncomplete = async () => {
     },
   });
 
+  let marked = 0;
   for (const session of expiredSessions) {
+    // Buddy/group session nobody accepted → cancelled, not "missed"
+    const invitees = (await prisma.sessionParticipant.findMany({
+      where: { sessionId: session.id, userId: { not: session.userId } },
+      select: { status: true },
+    }));
+    if (invitees.length && !invitees.some(p => p.status === 'confirmed')) {
+      await prisma.workoutSession.updateMany({
+        where: { id: session.id, status: 'scheduled' },
+        data:  { status: 'cancelled', incompleteReason: 'Invite not accepted before start time' },
+      });
+      continue;
+    }
     // Apply Trust -5 + Token -1 + mark missed
     await xpCtrl.onSessionMissed(session);
+    marked++;
   }
 
-  return { marked: expiredSessions.length };
+  return { marked };
 };
 
 module.exports = {
+  sendProofReminders,
+  onMyWay,
   scheduleSession,
   getMySessions,
   uploadProof,
   confirmSession,
   respondToInvite,
   markIncomplete,
+  expireUnansweredInvites,
+  setIo,
+  dayBounds,
   getPendingConfirmations,
   processProofConfirmations,
   getConfirmRate,

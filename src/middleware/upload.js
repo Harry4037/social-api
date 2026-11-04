@@ -27,7 +27,8 @@ const uploadDir = path.join(process.cwd(), process.env.UPLOAD_DIR || 'uploads');
 const storage = new CloudinaryStorage({
   cloudinary,
   params: async (req, file) => {
-    const folder = req.body.folder || 'covers';
+    const FOLDERS = ['avatars', 'proofs', 'covers', 'verifications', 'strike'];
+    const folder = FOLDERS.includes(req.body.folder) ? req.body.folder : 'covers';
 
     return {
       folder,
@@ -46,9 +47,9 @@ const storage = new CloudinaryStorage({
 // };
 
 const fileFilter = (req, file, cb) => {
-  const allowed = /jpeg|jpg|png|webp/;
-  const ext = allowed.test(path.extname(file.originalname).toLowerCase());
-  const mime = allowed.test(file.mimetype);
+  // Anchored checks ("jpgfoo.exe" / "text/html; jpeg" used to pass)
+  const ext = /^\.(jpe?g|png|webp)$/.test(path.extname(file.originalname || '').toLowerCase());
+  const mime = /^image\/(jpeg|png|webp)$/.test(file.mimetype || '');
 
   if (ext && mime) {
     return cb(null, true);

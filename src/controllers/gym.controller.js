@@ -15,7 +15,10 @@
 //   • Location shown = the gym, not your GPS point.
 //   • Check-in auto-expires after 2 hours. Blocked users never see you.
 //
-//  Needs GOOGLE_MAPS_API_KEY (Places API (New) enabled) in .env.
+//  Gym data: Google Places (New) when GOOGLE_MAPS_API_KEY is set; if the
+//  key is missing or Google fails, free OpenStreetMap data (Overpass API)
+//  is used instead, so the map is never empty.
+//  OVERPASS_URL can point to your own Overpass server (default: public one).
 // ─────────────────────────────────────────────────────────
 const axios = require('axios');
 const { v4: uuid } = require('uuid');
@@ -25,15 +28,55 @@ const notifSvc = require('../services/notification.service');
 const { blockedIdsFor } = require('./safety.controller');
 
 const CHECKIN_TTL_MS = 2 * 60 * 60 * 1000;
+const CHECKIN_MAX_DISTANCE_M = Number(process.env.CHECKIN_MAX_DISTANCE_M) || 500; // must be at the gym
+const CHECKIN_COOLDOWN_MS    = 10 * 60 * 1000; // buddies are notified on every check-in
 const CACHE_TTL_MS   = 6 * 60 * 60 * 1000; // Google results cached 6h per ~1km grid cell
 const MAX_RADIUS_M   = 5000;
 
 // ── Google Places (New) — Nearby / Text search ───────────
 const _cache = new Map(); // key → { at, gyms }
+const STALE_KEEP_MS = 7 * 24 * 60 * 60 * 1000; // old list kept as a fallback
+const FAIL_MEMORY_MS = 60 * 1000;
+const _inflight = new Map(); // key → Promise (one API call per area at a time)
+const _failedAt = new Map(); // key → time of last failure
 setInterval(() => {
   const now = Date.now();
-  for (const [k, v] of _cache) if (now - v.at > CACHE_TTL_MS) _cache.delete(k);
+  for (const [k, v] of _cache) if (now - v.at > STALE_KEEP_MS) _cache.delete(k);
+  for (const [k, t] of _failedAt) if (now - t > FAIL_MEMORY_MS) _failedAt.delete(k);
 }, 60 * 60 * 1000).unref?.();
+
+// Load test (1000 users): every map open called the gym API. Now:
+//  • fresh cache (6 h) → no call
+//  • same area already loading → wait for that one call
+//  • it failed < 1 min ago → don't call again (serve old list or fail fast)
+//  • call fails → serve the last good list if we have one
+const _cachedFetch = async (cacheKey, load) => {
+  const hit = _cache.get(cacheKey);
+  const now = Date.now();
+  if (hit && now - hit.at < CACHE_TTL_MS) return hit.gyms;
+  const failed = _failedAt.get(cacheKey);
+  if (failed && now - failed < FAIL_MEMORY_MS) {
+    if (hit) return hit.gyms;
+    throw new Error('gym source failed recently');
+  }
+  if (_inflight.has(cacheKey)) return _inflight.get(cacheKey);
+  const p = (async () => {
+    try {
+      const gyms = await load();
+      _cache.set(cacheKey, { at: Date.now(), gyms });
+      _failedAt.delete(cacheKey);
+      return gyms;
+    } catch (e) {
+      _failedAt.set(cacheKey, Date.now());
+      if (hit) return hit.gyms; // stale but useful
+      throw e;
+    } finally {
+      _inflight.delete(cacheKey);
+    }
+  })();
+  _inflight.set(cacheKey, p);
+  return p;
+};
 
 const FIELD_MASK = [
   'places.id', 'places.displayName', 'places.formattedAddress', 'places.location',
@@ -52,6 +95,76 @@ const _mapPlace = (p) => ({
   openNow:     p.currentOpeningHours?.openNow ?? null,
 });
 
+// ── OpenStreetMap (Overpass) — free fallback ─────────────
+// Search text goes into an Overpass regex → keep only letters, digits,
+// spaces and ' & - (no dots, quotes, brackets, regex tricks)
+const _osmEscape = (q) => String(q).normalize('NFKC')
+  .replace(/[^\p{L}\p{M}\p{N} '&-]/gu, ' ').replace(/\s+/g, ' ').trim().slice(0, 60);
+const _overpassQuery = ({ lat, lng, radius, q }) => {
+  const around = `around:${Math.round(radius)},${lat},${lng}`;
+  const name = q ? `["name"~"${_osmEscape(q)}",i]` : '';
+  return `[out:json][timeout:15];(` +
+    `node["leisure"="fitness_centre"]${name}(${around});` +
+    `way["leisure"="fitness_centre"]${name}(${around});` +
+    `node["amenity"="gym"]${name}(${around});` +
+    `way["amenity"="gym"]${name}(${around});` +
+    `);out center 40;`;
+};
+const _mapOsm = (el) => {
+  const t = el.tags || {};
+  const lat = el.lat ?? el.center?.lat;
+  const lng = el.lon ?? el.center?.lon;
+  if (!t.name || lat == null || lng == null) return null;
+  const street = [t['addr:housenumber'], t['addr:street']].filter(Boolean).join(' ');
+  const address = [street, t['addr:suburb'], t['addr:city']].filter(Boolean).join(', ') || null;
+  return {
+    placeId: `osm:${el.type}/${el.id}`, name: t.name, address,
+    lat: Number(lat), lng: Number(lng), rating: null, ratingCount: 0, openNow: null,
+  };
+};
+const fetchOsmGyms = async ({ lat, lng, radius, q }) => {
+  const cacheKey = `osm|${lat.toFixed(2)}|${lng.toFixed(2)}|${radius}|${(q || '').toLowerCase()}`;
+  return _cachedFetch(cacheKey, async () => {
+  const url = process.env.OVERPASS_URL || 'https://overpass-api.de/api/interpreter';
+  const { data } = await axios.post(url,
+    'data=' + encodeURIComponent(_overpassQuery({ lat, lng, radius, q })),
+    { headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'User-Agent': 'Seshlly/1.0' }, timeout: 15000 });
+  const seen = new Set();
+  const gyms = (data?.elements || []).map(_mapOsm).filter(Boolean)
+    .filter(g => !seen.has(g.name + g.lat.toFixed(4)) && seen.add(g.name + g.lat.toFixed(4)))
+    .sort((a, b) => _dist(lat, lng, a.lat, a.lng) - _dist(lat, lng, b.lat, b.lng))
+    .slice(0, 40);
+  return gyms;
+  });
+};
+
+// metres between two points
+const _dist = (lat1, lng1, lat2, lng2) => {
+  const R = 6371000, toRad = (d) => (d * Math.PI) / 180;
+  const dLat = toRad(lat2 - lat1), dLng = toRad(lng2 - lng1);
+  const a = Math.sin(dLat / 2) ** 2 + Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLng / 2) ** 2;
+  return 2 * R * Math.asin(Math.sqrt(a));
+};
+
+// A gym we have actually seen (cache from /gyms/nearby), else look it up
+// around the user. Returns null if no such gym exists near them.
+const _findGym = async (placeId, nearLat, nearLng) => {
+  for (const { gyms } of _cache.values()) {
+    const g = gyms.find(x => x.placeId === placeId);
+    if (g) return g;
+  }
+  const radius = Math.max(CHECKIN_MAX_DISTANCE_M * 2, 1000);
+  const sources = String(placeId).startsWith('osm:') ? [fetchOsmGyms] : [fetchGooglePlaces, fetchOsmGyms];
+  for (const fetch of sources) {
+    try {
+      const gyms = await fetch({ lat: nearLat, lng: nearLng, radius, q: null });
+      const g = gyms.find(x => x.placeId === placeId);
+      if (g) return g;
+    } catch (_) {/* try next source */}
+  }
+  return null;
+};
+
 const fetchGooglePlaces = async ({ lat, lng, radius, q }) => {
   const key = process.env.GOOGLE_MAPS_API_KEY;
   if (!key) {
@@ -61,9 +174,7 @@ const fetchGooglePlaces = async ({ lat, lng, radius, q }) => {
   }
   // ~1.1 km grid so nearby users share the cached result (saves API cost)
   const cacheKey = `${lat.toFixed(2)}|${lng.toFixed(2)}|${radius}|${(q || '').toLowerCase()}`;
-  const hit = _cache.get(cacheKey);
-  if (hit && Date.now() - hit.at < CACHE_TTL_MS) return hit.gyms;
-
+  return _cachedFetch(cacheKey, async () => {
   const headers = {
     'Content-Type': 'application/json',
     'X-Goog-Api-Key': key,
@@ -92,8 +203,8 @@ const fetchGooglePlaces = async ({ lat, lng, radius, q }) => {
   const gyms = (data.places || [])
     .filter(p => p.businessStatus !== 'CLOSED_PERMANENTLY' && p.location)
     .map(_mapPlace);
-  _cache.set(cacheKey, { at: Date.now(), gyms });
   return gyms;
+  });
 };
 
 // ── Buddies helpers ──────────────────────────────────────
@@ -142,15 +253,20 @@ const nearby = async (req, res, next) => {
     const radius = Math.min(Math.max(Number(req.query.radius) || 3000, 500), MAX_RADIUS_M);
     const q = (req.query.q || '').toString().trim().slice(0, 60) || null;
 
-    let gyms;
+    let gyms, source = 'google';
     try {
       gyms = await fetchGooglePlaces({ lat, lng, radius, q });
     } catch (e) {
-      if (e.code === 'MAPS_NOT_CONFIGURED') {
-        return res_.error(res, 'Gym map is not configured yet', 503, { code: 'MAPS_NOT_CONFIGURED' });
+      if (e.code !== 'MAPS_NOT_CONFIGURED') {
+        console.error('[gyms.nearby] Google Places error:', e.response?.data || e.message);
       }
-      console.error('[gyms.nearby] Google Places error:', e.response?.data || e.message);
-      return res_.error(res, 'Could not load gyms right now', 502);
+      try {
+        gyms = await fetchOsmGyms({ lat, lng, radius, q });
+        source = 'osm';
+      } catch (e2) {
+        console.error('[gyms.nearby] OpenStreetMap error:', e2.message);
+        return res_.error(res, 'Could not load gyms right now — pull to retry', 502);
+      }
     }
 
     // Merge "buddies here"
@@ -166,7 +282,7 @@ const nearby = async (req, res, next) => {
         ...g,
         buddiesHere: byPlace.get(g.placeId) || [],
       })),
-      source: 'google',
+      source,
     });
   } catch (e) { next(e); }
 };
@@ -196,13 +312,32 @@ const myCheckin = async (req, res, next) => {
 // POST /gyms/checkin
 const checkIn = async (req, res, next) => {
   try {
-    const { placeId, gymName, address } = req.body;
-    const lat = Number(req.body.lat);
-    const lng = Number(req.body.lng);
-    if (!placeId || !gymName || !Number.isFinite(lat) || !Number.isFinite(lng)) {
+    const { placeId } = req.body;
+    const myLat = Number(req.body.myLat);
+    const myLng = Number(req.body.myLng);
+    if (!placeId || !Number.isFinite(Number(req.body.lat)) || !Number.isFinite(Number(req.body.lng))) {
       return res_.error(res, 'placeId, gymName, lat, lng required', 422);
     }
+    // You can only check in where you are (buddies get a notification)
+    if (!Number.isFinite(myLat) || !Number.isFinite(myLng)) {
+      return res_.error(res, 'Turn on location to check in', 422);
+    }
+    // The gym's name + position come from OUR gym data, not the client
+    // (otherwise "myLat = lat" passed the distance check for any made-up gym)
+    const gym = await _findGym(placeId, myLat, myLng);
+    if (!gym) return res_.error(res, 'Gym not found — refresh the map and try again', 422);
+    const { name: gymName, address } = gym;
+    const lat = gym.lat, lng = gym.lng;
+    const away = _dist(myLat, myLng, lat, lng);
+    if (away > CHECKIN_MAX_DISTANCE_M) {
+      return res_.error(res, `You need to be at ${String(gymName).slice(0, 60)} to check in (you are ${(away / 1000).toFixed(1)} km away)`, 403);
+    }
     const now = new Date();
+    const recent = await prisma.gymCheckin.findFirst({
+      where: { userId: req.user.id, createdAt: { gt: new Date(now.getTime() - CHECKIN_COOLDOWN_MS) } },
+      select: { id: true },
+    });
+    if (recent) return res_.error(res, 'You just checked in — try again in a few minutes', 429);
 
     // only one active check-in at a time
     await prisma.gymCheckin.updateMany({
@@ -226,7 +361,7 @@ const checkIn = async (req, res, next) => {
       await notifSvc.create({
         userId: b, type: 'match',
         title: `💪 ${c.user.firstName} training at ${c.gymName}`,
-        message: 'Join karo ya ek Flash bhejo!',
+        message: 'Join them or send a Flash!',
         data: { kind: 'buddy_checkin', placeId, buddyId: req.user.id },
       });
     }
@@ -255,4 +390,10 @@ const cleanupCheckins = async () => {
   return { deleted: r.count };
 };
 
-module.exports = { nearby, buddiesActive, myCheckin, checkIn, checkOut, cleanupCheckins, fetchGooglePlaces };
+module.exports = {
+  nearby, buddiesActive, myCheckin, checkIn, checkOut, cleanupCheckins,
+  fetchGooglePlaces, fetchOsmGyms,
+  // for tests
+  _mapOsm, _overpassQuery, _clearCache: () => { _cache.clear(); _failedAt.clear(); _inflight.clear(); },
+  _expireCache: () => { for (const v of _cache.values()) v.at = 0; },
+};

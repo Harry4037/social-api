@@ -27,6 +27,12 @@ const safetyCtrl    = require('../controllers/safety.controller');
 const gymCtrl       = require('../controllers/gym.controller');
 
 const challengeRouter = require('./challenge.routes');
+const { mediaUrlValidator, isOwnUpload } = require('../utils/mediaUrl');
+// express-validator check: URL must be a file THIS user uploaded
+const ownUploadValidator = async (value, { req }) => {
+  if (!(await isOwnUpload(req.user.id, value))) throw new Error('Image must be uploaded through the app');
+  return true;
+};
 
 // ── /users ────────────────────────────────────────────────
 const userRouter = express.Router();
@@ -37,10 +43,24 @@ userRouter.put('/me', authenticate, [
     .matches(/^[a-z0-9_]+$/i).withMessage('Username: letters, numbers, underscores only'),
   body('bio').optional().trim().isLength({ max: 500 }),
   body('city').optional().trim(),
-  body('activities').optional().isArray(),
-  body('goals').optional().isArray(),
   body('latitude').optional().isFloat({ min: -90, max: 90 }),
   body('longitude').optional().isFloat({ min: -180, max: 180 }),
+  body('avatarUrl').optional({ nullable: true }).custom(ownUploadValidator),
+  // bail() first: a 50 000-item array must be rejected without checking each item
+  body('activities').optional().isArray({ max: 20 }).withMessage('Up to 20 activities').bail()
+    .custom(a => a.every(x => typeof x === 'string' && x.length <= 40)).withMessage('Invalid activity'),
+  body('goals').optional().isArray({ max: 20 }).withMessage('Up to 20 goals').bail()
+    .custom(a => a.every(x => typeof x === 'string' && x.length <= 60)).withMessage('Invalid goal'),
+  body(['city', 'username']).optional({ nullable: true }).isLength({ max: 60 }),
+  body(['firstName', 'lastName']).optional().isLength({ max: 50 }),
+  body('searchRadius').optional().isInt({ min: 1, max: 500 }),
+  body('profileVisibility').optional().isIn(['public', 'buddies', 'hidden']),
+  body(['shareLocation', 'showOnline', 'walkthroughSeen']).optional().isBoolean(),
+  body('primaryGym').optional({ nullable: true }).trim().isLength({ max: 120 }),
+  body('instagramHandle').optional({ nullable: true }).trim().isLength({ max: 60 }),
+  body('phone').optional({ nullable: true }).trim().isLength({ max: 20 }),
+  body(['gender', 'primaryActivity', 'experienceLevel', 'country'])
+    .optional({ nullable: true }).isString().isLength({ max: 40 }),
 ], validate, userCtrl.updateProfile);
 
 userRouter.get('/:id/profile', authenticate, [param('id').isUUID()], validate, userCtrl.getBuddyProfile);
@@ -57,6 +77,11 @@ userRouter.get('/me/photos', authenticate, async (req, res, next) => {
 
 userRouter.post('/me/photos', authenticate, async (req, res, next) => {
   try {
+    const url = (req.body.url || '').toString().trim();
+    // Must be MY upload (someone else's photo = catfishing)
+    if (!(await isOwnUpload(req.user.id, url))) {
+      return res.status(422).json({ success: false, message: 'Photo must be uploaded through the app' });
+    }
     const count = await prisma.userPhoto.count({ where: { userId: req.user.id } });
     if (count >= 5)
       return res.status(400).json({ success: false, message: 'Maximum 5 photos allowed' });
@@ -64,20 +89,67 @@ userRouter.post('/me/photos', authenticate, async (req, res, next) => {
       data: {
         id: require('uuid').v4(),
         userId: req.user.id,
-        url: req.body.url,
+        url,
         order: count,
       },
     });
+    // First photo becomes the profile picture if the user has none yet
+    const me = await prisma.user.findUnique({ where: { id: req.user.id }, select: { avatarUrl: true } });
+    if (!me?.avatarUrl || count === 0) {
+      await prisma.user.update({ where: { id: req.user.id }, data: { avatarUrl: url } });
+    }
     return res.status(201).json({ success: true, data: { photo } });
   } catch (e) { next(e); }
 });
 
+// Re-number photo order 0..n-1 and keep avatarUrl = first photo
+const _syncPhotos = async (userId) => {
+  const photos = await prisma.userPhoto.findMany({ where: { userId }, orderBy: { order: 'asc' } });
+  await Promise.all(photos.map((p, i) => p.order === i
+    ? null
+    : prisma.userPhoto.update({ where: { id: p.id }, data: { order: i } })));
+  if (photos.length) {
+    await prisma.user.update({ where: { id: userId }, data: { avatarUrl: photos[0].url } });
+  }
+  return photos.map((p, i) => ({ ...p, order: i }));
+};
+
 userRouter.delete('/me/photos/:photoId', authenticate, async (req, res, next) => {
   try {
-    await prisma.userPhoto.deleteMany({
+    const photo = await prisma.userPhoto.findFirst({
       where: { id: req.params.photoId, userId: req.user.id },
     });
-    return res.json({ success: true, message: 'Photo deleted' });
+    if (!photo) return res.json({ success: true, message: 'Photo deleted' });
+    await prisma.userPhoto.delete({ where: { id: photo.id } });
+    const remaining = await _syncPhotos(req.user.id);
+    // Deleted the profile picture and no photos left → clear it
+    if (!remaining.length) {
+      const me = await prisma.user.findUnique({ where: { id: req.user.id }, select: { avatarUrl: true } });
+      if (me?.avatarUrl === photo.url) {
+        await prisma.user.update({ where: { id: req.user.id }, data: { avatarUrl: null } });
+      }
+    }
+    return res.json({ success: true, message: 'Photo deleted', data: { photos: remaining } });
+  } catch (e) { next(e); }
+});
+
+// PUT /users/me/photos/:photoId/main — make this the main (profile) photo
+userRouter.put('/me/photos/:photoId/main', authenticate, async (req, res, next) => {
+  try {
+    const photos = await prisma.userPhoto.findMany({
+      where: { userId: req.user.id }, orderBy: { order: 'asc' },
+    });
+    const target = photos.find(p => p.id === req.params.photoId);
+    if (!target) return res.status(404).json({ success: false, message: 'Photo not found' });
+    const ordered = [target, ...photos.filter(p => p.id !== target.id)];
+    await prisma.$transaction(ordered.map((p, i) =>
+      prisma.userPhoto.update({ where: { id: p.id }, data: { order: i } })));
+    await prisma.user.update({ where: { id: req.user.id }, data: { avatarUrl: target.url } });
+    return res.json({
+      success: true,
+      message: 'Main photo updated',
+      data: { avatarUrl: target.url, photos: ordered.map((p, i) => ({ ...p, order: i })) },
+    });
   } catch (e) { next(e); }
 });
 
@@ -127,18 +199,25 @@ if (typeof matchCtrl.getMatchRequests === 'function') {
 // ── /sessions ─────────────────────────────────────────────
 const sessionRouter = express.Router();
 sessionRouter.post('/', authenticate, [
-  body('activity').notEmpty().withMessage('Activity is required'),
+  body('activity').isString().trim().notEmpty().withMessage('Activity is required')
+    .isLength({ max: 40 }).withMessage('Activity name is too long'),
+  body('challengeId').optional({ nullable: true }).isUUID(),
   body('scheduledAt').isISO8601().withMessage('scheduledAt must be ISO 8601'),
   body('buddyId').optional().isUUID(),
-  body('gymName').optional().trim(),
+  body('buddyIds').optional().isArray({ max: 9 }).withMessage('buddyIds must be a list (max 9)').bail()
+    .custom(a => a.every(x => typeof x === 'string' && /^[0-9a-f-]{36}$/i.test(x))).withMessage('Invalid buddy id'),
+  body('durationMins').optional().isIn([45, 60, 90, 120, '45', '60', '90', '120']),
+  body('gymName').optional({ nullable: true }).trim().isLength({ max: 120 }),
+  body('notes').optional({ nullable: true }).isString().isLength({ max: 500 }),
 ], validate, sessCtrl.scheduleSession);
 sessionRouter.get('/my', authenticate, sessCtrl.getMySessions);
 sessionRouter.get('/pending-confirm', authenticate, sessCtrl.getPendingConfirmations);
 sessionRouter.post('/:id/proof', authenticate, [
   param('id').isUUID(),
-  body('proofImageUrl').notEmpty().isURL().withMessage('Valid image URL required'),
+  body('proofImageUrl').custom(mediaUrlValidator),
 ], validate, sessCtrl.uploadProof);
 sessionRouter.post('/:id/confirm', authenticate, [param('id').isUUID()], validate, sessCtrl.confirmSession);
+sessionRouter.post('/:id/on-my-way', authenticate, [param('id').isUUID()], validate, sessCtrl.onMyWay);
 sessionRouter.post('/:id/respond', authenticate, [
   param('id').isUUID(),
   body('action').isIn(['confirm', 'decline']),
@@ -147,11 +226,15 @@ sessionRouter.post('/:id/respond', authenticate, [
 // ── /chat ─────────────────────────────────────────────────
 const chatRouter = express.Router();
 chatRouter.get('/', authenticate, chatCtrl.getChats);
+// GET /chat/with/:userId — my 1:1 chat with a buddy (profile "Message" button)
+chatRouter.get('/with/:userId', authenticate, [param('userId').isUUID()], validate, chatCtrl.chatWith);
 chatRouter.get('/:chatId/messages', authenticate, [param('chatId').isUUID()], validate, chatCtrl.getMessages);
 chatRouter.post('/:chatId/messages', authenticate, [
   param('chatId').isUUID(),
   body('content').notEmpty().isLength({ max: 5000 }),
-  body('type').optional().isIn(['text', 'image', 'session_invite', 'proof']),
+  // proof / session_invite / system cards are created by the SERVER only
+  body('type').optional().isIn(['text', 'image']).withMessage('Unsupported message type'),
+  body('metadata').not().exists().withMessage('metadata is not allowed'),
 ], validate, chatCtrl.sendMessage);
 chatRouter.patch('/:chatId/read', authenticate, [param('chatId').isUUID()], validate, chatCtrl.markRead);
 chatRouter.patch('/:chatId/mode', authenticate, [
@@ -168,6 +251,7 @@ notifRouter.patch('/:id/read', authenticate, [param('id').isUUID()], validate, n
 // ── /subscriptions ────────────────────────────────────────
 const subRouter = express.Router();
 subRouter.get('/plans', subCtrl.getPlans);
+subRouter.post('/webhook', subCtrl.webhook); // Razorpay → server (signature checked)
 subRouter.post('/order', authenticate, [body('planId').isUUID()], validate, subCtrl.createOrder);
 subRouter.post('/verify-payment', authenticate, [
   body('razorpay_order_id').notEmpty(),
@@ -183,7 +267,7 @@ tokensRouter.post('/buy', authenticate, [
 
 // ── /upload ───────────────────────────────────────────────
 const uploadRouter = express.Router();
-uploadRouter.post('/', authenticate, upload.single('file'), upCtrl.uploadFile);
+uploadRouter.post('/', authenticate, require('../middleware/middleware').uploadLimiter, upload.single('file'), upCtrl.uploadFile);
 
 // ── /global-leaderboard ───────────────────────────────────
 const globalLeaderboardRouter = express.Router();
@@ -199,8 +283,10 @@ const feedRouter = express.Router();
 feedRouter.get('/', authenticate, challengeCtrl.getGlobalFeed);
 feedRouter.post('/', authenticate, [
   body('challengeId').isUUID(),
-  body('stationTitle').notEmpty(),
+  body('stationTitle').optional().isString().isLength({ max: 120 }),
+  body('caption').optional({ nullable: true }).isString().isLength({ max: 300 }),
   body('sessionId').optional().isUUID(),
+  body('stationCompletionId').optional().isUUID(),
 ], validate, challengeCtrl.postToFeed);
 
 // ── /referral ─────────────────────────────────────────────
@@ -219,7 +305,10 @@ brandAdsRouter.post('/:id/click',        authenticate, brandAdsCtrl.trackClick);
 // ── /verification (user-facing only) ─────────────────────
 // Admin queue is in admin.routes.js under /admin/verifications
 const verifRouter = express.Router();
-verifRouter.post('/submit',  authenticate, verifCtrl.submit);
+verifRouter.post('/submit',  authenticate, [
+  body('docUrl').custom(ownUploadValidator),
+  body('selfieUrl').optional({ nullable: true }).custom(ownUploadValidator),
+], validate, verifCtrl.submit);
 verifRouter.get('/status',   authenticate, verifCtrl.getStatus);
 
 // ── /waitlist (user-facing only) ─────────────────────────
@@ -229,9 +318,9 @@ waitlistRouter.post('/join', authenticate, waitlistCtrl.join);
 
 // ── /flash ────────────────────────────────────────────────
 const flashRouter = express.Router();
-flashRouter.post('/send',        authenticate, flashCtrl.recordFlashSent);
+flashRouter.post('/send',        authenticate, [body('buddyId').isUUID()], validate, flashCtrl.recordFlashSent);
 flashRouter.get('/streaks',      authenticate, flashCtrl.getMyStreaks);
-flashRouter.get('/streak/:buddyId', authenticate, flashCtrl.getPairStreak);
+flashRouter.get('/streak/:buddyId', authenticate, [param('buddyId').isUUID()], validate, flashCtrl.getPairStreak);
 
 // ── /safety — block & report ─────────────────────────────
 const safetyRouter = express.Router();
@@ -259,6 +348,9 @@ gymRouter.post('/checkin', authenticate, [
   body('gymName').isString().notEmpty(),
   body('lat').isFloat({ min: -90, max: 90 }),
   body('lng').isFloat({ min: -180, max: 180 }),
+  body('placeId').isLength({ max: 191 }),
+  body('gymName').isLength({ max: 120 }),
+  body('address').optional({ nullable: true }).isString().isLength({ max: 255 }),
 ], validate, gymCtrl.checkIn);
 gymRouter.delete('/checkin', authenticate, gymCtrl.checkOut);
 

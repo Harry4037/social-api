@@ -10,7 +10,8 @@ const uploadFile = async (req, res, next) => {
   try {
     if (!req.file) return res_.error(res, 'No file received', 400);
 
-    const folder   = req.body.folder || 'covers';
+    const FOLDERS  = ['avatars', 'proofs', 'covers', 'verifications', 'strike'];
+    const folder   = FOLDERS.includes(req.body.folder) ? req.body.folder : 'covers';
     const url      = fileUrl(req, folder, req.file.filename);
 
     await prisma.upload.create({

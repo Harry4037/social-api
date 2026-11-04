@@ -6,18 +6,12 @@
 const prisma = require('../config/db');
 
 // ── LEVEL THRESHOLDS ──────────────────────────────────────
-const LEVELS = [
-  { level: 1,  name: 'Rookie',    xp: 0      },
-  { level: 2,  name: 'Grinder',   xp: 500    },
-  { level: 3,  name: 'Regular',   xp: 1500   },
-  { level: 4,  name: 'Dedicated', xp: 3500   },
-  { level: 5,  name: 'Warrior',   xp: 7000   },
-  { level: 6,  name: 'Champion',  xp: 13000  },
-  { level: 7,  name: 'Elite',     xp: 22000  },
-  { level: 8,  name: 'Legend',    xp: 35000  },
-  { level: 9,  name: 'Icon',      xp: 55000  },
-  { level: 10, name: 'GOATified', xp: 80000  },
-];
+// ONE level table for the whole product = src/utils/xp.js (the app's
+// AppConstants.levelThresholds / levelNames use the same numbers).
+// (A second table here — 0/500/1500…, "Grinder" — made the level-up push
+// and the profile disagree.)
+const xpUtils = require('../utils/xp');
+const LEVELS = xpUtils.THRESHOLDS.map((xp, i) => ({ level: i + 1, name: xpUtils.LEVEL_NAMES.at(i), xp }));
 
 // ── TRUST FLOORS (inactivity only) ───────────────────────
 const TRUST_FLOORS = [
@@ -61,35 +55,35 @@ const getTrustFloor = (score) => {
 // ── AWARD XP ─────────────────────────────────────────────
 // action examples: 'session_complete', 'challenge_station', 'profile_complete'
 const awardXP = async (userId, amount, action, metadata = {}) => {
-  const user = await prisma.user.findUnique({ where: { id: userId } });
-  if (!user) return null;
-
-  const newXpTotal   = user.xpTotal   + amount;
-  const newWeeklyXp  = user.weeklyXp  + amount;
-  const newMonthlyXp = user.monthlyXp + amount;
-  const newLevel     = getLevel(newXpTotal);
-  const leveledUp    = newLevel.level > user.level;
-
-  await prisma.$transaction([
-    prisma.user.update({
-      where: { id: userId },
-      data: {
-        xpTotal:   newXpTotal,
-        weeklyXp:  newWeeklyXp,
-        monthlyXp: newMonthlyXp,
-        level:     newLevel.level,
-      },
-    }),
-    prisma.xpEvent.create({
-      data: {
-        id:       require('crypto').randomUUID(),
-        userId,
-        action,
-        xpAmount: amount,
-        metadata,
-      },
-    }),
-  ]);
+  // Atomic increments (read-then-write lost XP when two awards landed together)
+  let user;
+  try {
+    [user] = await prisma.$transaction([
+      prisma.user.update({
+        where: { id: userId },
+        data: {
+          xpTotal:   { increment: amount },
+          weeklyXp:  { increment: amount },
+          monthlyXp: { increment: amount },
+        },
+        select: { xpTotal: true, level: true },
+      }),
+      prisma.xpEvent.create({
+        data: { id: require('crypto').randomUUID(), userId, action, xpAmount: amount, metadata },
+      }),
+    ]);
+  } catch (e) {
+    if (e.code === 'P2025') return null; // user deleted
+    throw e;
+  }
+  const newXpTotal = user.xpTotal;
+  const newLevel   = getLevel(newXpTotal);
+  // only ever up; the guard makes the level-up push go out once
+  const up = await prisma.user.updateMany({
+    where: { id: userId, level: { lt: newLevel.level } },
+    data:  { level: newLevel.level },
+  });
+  const leveledUp = up.count > 0;
 
   // Send level-up notification if leveled up
   if (leveledUp) {
@@ -166,7 +160,7 @@ const awardToken = async (userId, amount, reason) => {
   if (!user) return null;
 
   // Cap based on plan
-  const cap = user.subscriptionPlan === 'pro' ? 200 : 50;
+  const cap = ['pro', 'elite'].includes(user.subscriptionPlan) ? 200 : 50;
   const current = user.chatTokens;
   const toAdd = Math.min(amount, cap - current);
   if (toAdd <= 0) return { awarded: 0, newBalance: current, reason: 'cap_reached' };
@@ -208,6 +202,8 @@ const onSessionComplete = async (session, participantCount = 2) => {
   const results = {};
   const sessionXP = calcSessionXP(session, participantCount);
   const buddyIds = [session.userId, session.buddyId].filter(Boolean);
+  // First real workout → pending referral bonus is paid
+  for (const uid of buddyIds) await require('./referral.controller').rewardReferral(uid);
 
   for (const uid of buddyIds) {
     const xpResult    = await awardXP(uid, sessionXP, 'session_complete', { sessionId: session.id });
@@ -313,7 +309,7 @@ const resetMonthlyXP = async () => {
 // ── PRO TOKEN REFILL (called by CRON monthly) ────────────
 const refillProTokens = async () => {
   const proUsers = await prisma.user.findMany({
-    where: { subscriptionPlan: 'pro' },
+    where: { subscriptionPlan: { in: ['pro', 'elite'] } }, // Elite = everything in Pro
     select: { id: true, chatTokens: true },
   });
 
@@ -333,23 +329,9 @@ const refillProTokens = async () => {
 };
 
 // ── INTERNAL: create notification ────────────────────────
-const _createNotification = async (userId, message, type, data = {}) => {
-  try {
-    await prisma.notification.create({
-      data: {
-        id:      require('crypto').randomUUID(),
-        userId,
-        type,
-        title:   message,
-        message: message,
-        data:    JSON.stringify(data),
-        isRead:  false,
-      },
-    });
-  } catch (_) {
-    // Notification failure should not break main flow
-  }
-};
+// Uses the notification service (valid type, push, quiet hours, daily cap)
+const _createNotification = (userId, message, kind, data = {}) =>
+  require('../services/notification.service').notifyKind(userId, kind, message, data).catch(() => null);
 
 module.exports = {
   awardXP,

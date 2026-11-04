@@ -99,7 +99,7 @@ const notifySessionScheduled = (buddyId, userName, sessionId) =>
 const notifyProofRequired = (userId, sessionId) =>
   create({ userId, type: 'proof',
     title: 'Upload Workout Proof ⚠️',
-    message: 'Your session just ended! Upload proof within 8 hours to keep your tokens.',
+    message: 'Your session just ended! Upload a proof photo within 3 hours to earn your XP.',
     actionUrl: `/sessions/${sessionId}/proof`,
     data: { sessionId },
   });
@@ -121,8 +121,8 @@ const notifyTokenLow = (userId, remaining) =>
 // Reminder #1 — right after proof upload
 const notifyProofUploaded = (confirmerId, uploaderName, sessionId, extra = {}) =>
   create({ userId: confirmerId, type: 'proof',
-    title: '📸 Proof aaya — confirm karo',
-    message: `${uploaderName} ne session proof bheja. 2 ghante mein confirm karo — dono ko XP milega!`,
+    title: '📸 Confirm your buddy\'s proof',
+    message: `${uploaderName} uploaded a session proof. Confirm within 2 hours so you both earn XP!`,
     actionUrl: `/sessions/${sessionId}/confirm`,
     data: { sessionId, kind: 'proof_confirm', ...extra },
   });
@@ -130,10 +130,10 @@ const notifyProofUploaded = (confirmerId, uploaderName, sessionId, extra = {}) =
 // Reminder #2 / #3 — sent by cron
 const notifyProofConfirmReminder = (confirmerId, uploaderName, sessionId, minutesLeft, xp) =>
   create({ userId: confirmerId, type: 'proof',
-    title: minutesLeft <= 15 ? '⚠️ Sirf 15 min bache!' : '⏳ Proof confirm pending',
+    title: minutesLeft <= 15 ? '⚠️ Only 15 minutes left!' : '⏳ Proof confirm pending',
     message: minutesLeft <= 15
-      ? `${uploaderName} ka proof confirm karo — warna aapka +${xp} XP chala jayega.`
-      : `${uploaderName} ka +${xp} XP aapke confirm ka wait kar raha hai.`,
+      ? `Confirm ${uploaderName}\'s proof now or you\'ll lose your +${xp} XP.`
+      : `${uploaderName}\'s +${xp} XP is waiting for your confirmation.`,
     actionUrl: `/sessions/${sessionId}/confirm`,
     data: { sessionId, kind: 'proof_confirm', minutesLeft },
   });
@@ -141,8 +141,8 @@ const notifyProofConfirmReminder = (confirmerId, uploaderName, sessionId, minute
 // Timeout — confirmer missed it
 const notifyProofConfirmMissed = (confirmerId, uploaderName, sessionId, xpLost) =>
   create({ userId: confirmerId, type: 'proof',
-    title: '😔 Confirm miss ho gaya',
-    message: `${uploaderName} ko XP mil gaya, aapka +${xpLost} XP chala gaya. Trust -2.`,
+    title: '😔 Confirmation missed',
+    message: `${uploaderName} got their XP, but you missed your +${xpLost} XP. Trust -2.`,
     actionUrl: `/sessions/${sessionId}`,
     data: { sessionId, kind: 'proof_confirm_missed' },
   });
@@ -151,13 +151,67 @@ const notifyProofConfirmMissed = (confirmerId, uploaderName, sessionId, xpLost) 
 const notifyProofAutoCompleted = (uploaderId, confirmerName, sessionId, xp) =>
   create({ userId: uploaderId, type: 'session',
     title: '✅ Session complete',
-    message: `${confirmerName} ne confirm nahi kiya, par aapka session complete ho gaya. +${xp} XP`,
+    message: `${confirmerName} didn\'t confirm in time, but your session is complete. +${xp} XP`,
     actionUrl: `/sessions/${sessionId}`,
     data: { sessionId, kind: 'proof_auto_completed' },
   });
 
+// ── Legacy "kinds" → valid NotificationType ─────────────
+// Several controllers wrote notifications with types like 'new_match' or
+// 'level_up' that are NOT in the NotificationType enum, so every one of
+// them failed silently: no "someone liked you", "new match", "level up",
+// "strike" or "token low" notification was ever saved or pushed.
+const KIND_TYPE = {
+  new_match: 'match', match_request: 'match', match_accepted: 'match',
+  strike_received: 'match', strike_reacted: 'match', streak_warning: 'match',
+  session_missed: 'session',
+  level_up: 'xp', trust_level_up: 'xp',
+  token_low: 'token',
+};
+const TYPES = new Set(['match', 'session', 'proof', 'chat', 'token', 'xp', 'payment', 'subscription', 'system']);
+const typeForKind = (kind) => (TYPES.has(kind) ? kind : KIND_TYPE[kind] || 'system');
+
+/** One-line notifications from older helpers: title = first line, rest = message */
+const notifyKind = (userId, kind, text, data = {}, opts = {}) => {
+  const [first, ...rest] = String(text).split('\n');
+  return create({
+    userId,
+    type: typeForKind(kind),
+    title: first.slice(0, 180),
+    message: (rest.join('\n').trim() || first),
+    data: { ...(data || {}), kind },
+    ...opts,
+  });
+};
+
+// ── CRON (daily): keep the notifications table small ──
+// Read ones older than 30 days and anything older than 90 days.
+// Deleted in batches so a big table is never locked for long.
+const pruneOldNotifications = async ({ batch = 5000 } = {}) => {
+  const now = Date.now();
+  // Two passes, each on its own index (one OR query scanned half the table)
+  const passes = [
+    { isRead: true, createdAt: { lt: new Date(now - 30 * 864e5) } },
+    { createdAt: { lt: new Date(now - 90 * 864e5) } },
+  ];
+  let deleted = 0;
+  for (const where of passes) {
+    for (;;) {
+      const rows = await prisma.notification.findMany({ where, select: { id: true }, take: batch });
+      if (!rows.length) break;
+      const r = await prisma.notification.deleteMany({ where: { id: { in: rows.map(x => x.id) } } });
+      deleted += r.count;
+      if (rows.length < batch) break;
+    }
+  }
+  return { deleted };
+};
+
 module.exports = {
+  pruneOldNotifications,
   create,
+  notifyKind,
+  typeForKind,
   isQuietHours,
   notifyProofUploaded,
   notifyProofConfirmReminder,

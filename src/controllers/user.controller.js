@@ -1,6 +1,7 @@
 'use strict';
 const prisma     = require('../config/db');
-const { formatUser, formatBuddyProfile } = require('../utils/formatUser');
+const { withUserCounts, withUserCount } = require('../utils/relationCounts');
+const { formatUser, formatBuddyProfile, PHOTOS_SELECT } = require('../utils/formatUser');
 const res_       = require('../utils/response');
 
 // PUT /users/me
@@ -11,7 +12,18 @@ const updateProfile = async (req, res, next) => {
       gender, primaryActivity, activities, experienceLevel, goals,
       primaryGym, latitude, longitude, instagramHandle, phone,
       avatarUrl, walkthroughSeen, searchRadius,
+      profileVisibility, shareLocation, showOnline,
     } = req.body;
+
+    // A verified Instagram handle can't be swapped for someone else's
+    if (instagramHandle !== undefined) {
+      const cur = await prisma.user.findUnique({
+        where: { id: req.user.id }, select: { instagramVerifiedAt: true, isInfluencer: true, instagramHandle: true },
+      });
+      if ((cur?.instagramVerifiedAt || cur?.isInfluencer) && instagramHandle !== cur.instagramHandle) {
+        return res_.error(res, 'Your verified Instagram handle can only be changed by our team', 403);
+      }
+    }
 
     // Ensure username uniqueness when provided
     if (username) {
@@ -43,11 +55,14 @@ const updateProfile = async (req, res, next) => {
         ...(longitude       !== undefined && { longitude }),
         ...(searchRadius    !== undefined && { searchRadius: Number(searchRadius) }),
         ...(instagramHandle !== undefined && { instagramHandle }),
+        ...(profileVisibility !== undefined && { profileVisibility }),
+        ...(shareLocation   !== undefined && { shareLocation: !!shareLocation }),
+        ...(showOnline      !== undefined && { showOnline: !!showOnline }),
       },
-      include: { _count: { select: { matchesA: true, sessionsAsUser: true, challengeEntries: true } } },
+      include: { photos: PHOTOS_SELECT },
     });
 
-    return res_.success(res, formatUser(user), 'Profile updated');
+    return res_.success(res, formatUser(await withUserCount(user, { challenges: true })), 'Profile updated');
   } catch (e) { next(e); }
 };
 
@@ -56,12 +71,22 @@ const getBuddyProfile = async (req, res, next) => {
   try {
     const user = await prisma.user.findUnique({
       where:   { id: req.params.id, status: 'ACTIVE', isBanned: false },
-      include: { _count: { select: { matchesA: true, sessionsAsUser: true, challengeEntries: true } } },
+      include: { photos: PHOTOS_SELECT },
     });
     if (!user) return res_.error(res, 'User not found', 404);
+    await withUserCount(user, { challenges: true });
     // Blocked either way → profile hidden
     const { isBlockedBetween } = require('./safety.controller');
     if (await isBlockedBetween(req.user.id, user.id)) return res_.error(res, 'User not found', 404);
+    // Buddies-only / hidden profiles: only buddies can open them
+    if (user.id !== req.user.id && (user.profileVisibility || 'public') !== 'public') {
+      const buddy = await prisma.match.findFirst({
+        where: { status: 'active', OR: [
+          { userAId: req.user.id, userBId: user.id }, { userAId: user.id, userBId: req.user.id }] },
+        select: { id: true },
+      });
+      if (!buddy) return res_.error(res, 'User not found', 404);
+    }
 
     const me = await prisma.user.findUnique({ where: { id: req.user.id } });
     const { computeCompatibility, haversine } = require('../utils/compatibility');

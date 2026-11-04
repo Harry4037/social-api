@@ -28,6 +28,7 @@ enum SessionStatus {
   scheduled // session booked, upcoming
   completed // proof uploaded + buddy confirmed
   missed // 3hr window passed, no proof uploaded
+  cancelled // invite declined / not accepted before start — no penalty
 }
 
 enum MessageType {
@@ -99,6 +100,10 @@ model User {
   goals           Json    @default("[]")
   primaryGym      String?
   searchRadius    Int     @default(10)
+  // Privacy (Profile → Privacy). public = in Discover; buddies/hidden = not
+  profileVisibility String  @default("public")
+  shareLocation     Boolean @default(true) // false → nobody sees your distance
+  showOnline        Boolean @default(true) // false → never shown as "online"
 
   // Gamification
   xpTotal    Int     @default(0)
@@ -172,6 +177,7 @@ model User {
   reportsReceived UserReport[] @relation("ReportsReceived")
   // Gym map check-ins
   gymCheckins     GymCheckin[]
+  passwordResets  PasswordReset[]
 
   @@index([email])
   @@index([city])
@@ -219,6 +225,7 @@ model Swipe {
   @@unique([swiperId, swipedId])
   @@index([swiperId])
   @@index([swipedId])
+  @@index([swipedId, createdAt]) // "who liked me", newest first
   @@map("swipes")
 }
 
@@ -230,6 +237,8 @@ model Match {
   buddyStrikeStreak Int       @default(0) // Strike 2 streak count
   strikeCount       Int       @default(0) // Total strikes sent
   lastStrikeAt      DateTime? // Last strike sent timestamp
+  streakCountedAt   DateTime? // last day the strike streak went +1 (max once/day)
+  streakFreezeUsedAt DateTime? // Pro: one free "streak freeze" per 30 days
   createdAt         DateTime  @default(now())
 
   userA   User          @relation("MatchUserA", fields: [userAId], references: [id], onDelete: Cascade)
@@ -264,6 +273,7 @@ model WorkoutSession {
   confirmTimedOut  Boolean       @default(false) // 2h passed without confirmation
   confirmReminders Int           @default(0) // reminders sent to confirmer (max 3)
   startReminderSentAt DateTime? // "session in 1 hour" reminder sent
+  onMyWay          Json? // userIds who tapped "On my way" (once each)
   xpEarned         Int?
   tokensDeducted   Int?
   notes            String?       @db.Text
@@ -284,6 +294,11 @@ model WorkoutSession {
   @@index([scheduledAt])
   @@index([endTime])
   @@index([challengeId])
+  @@index([proofUploadedBy]) // "same photo reused" check on every proof
+  @@index([status, endTime])     // crons: ended without proof
+  @@index([status, scheduledAt]) // crons: missed / reminders
+  @@index([userId, scheduledAt])  // My sessions, newest first (no filesort)
+  @@index([buddyId, scheduledAt])
   @@map("workout_sessions")
 }
 
@@ -360,12 +375,16 @@ model Message {
   readAt    DateTime?
   metadata  Json?
   expiresAt DateTime? // set only when chat is in 24h mode; null = keep forever
+  sessionId String? // invite / proof cards → found by index, not a JSON scan
   createdAt DateTime    @default(now())
 
   chat   Chat @relation(fields: [chatId], references: [id], onDelete: Cascade)
   sender User @relation(fields: [senderId], references: [id], onDelete: Cascade)
 
   @@index([chatId])
+  @@index([chatId, createdAt]) // chat page, newest first (load test)
+  @@index([chatId, isRead])    // unread badge per chat
+  @@index([sessionId])
   @@index([senderId])
   @@index([createdAt])
   @@index([expiresAt])
@@ -390,7 +409,10 @@ model Notification {
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId])
+  @@index([userId, createdAt]) // my list, newest first (load test)
+  @@index([userId, isRead])    // unread badge
   @@index([isRead])
+  @@index([isRead, createdAt]) // daily clean-up of old read ones (218 → 10 ms)
   @@index([createdAt])
   @@map("notifications")
 }
@@ -466,6 +488,7 @@ model DailySwipe {
   userId String
   date   String
   count  Int    @default(0)
+  superLikes Int @default(0) // atomic daily super-like counter
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
@@ -485,6 +508,7 @@ model XpEvent {
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId])
+  @@index([createdAt, userId, xpAmount]) // weekly recap: last 7 days (649 → 89 ms at 300k rows)
   @@map("xp_events")
 }
 
@@ -503,6 +527,9 @@ model AdminUser {
   isActive     Boolean   @default(true)
   status       String    @default("pending") // active | pending | revoked (CMS)
   invitedBy    String?
+  passwordChangedAt DateTime? // tokens issued before this are rejected
+  twoFactorSecret   String?   @db.Text // AES-GCM encrypted TOTP secret
+  twoFactorEnabled  Boolean   @default(false)
   lastLoginAt  DateTime?
   lastActiveAt DateTime?
   createdAt    DateTime  @default(now())
@@ -621,7 +648,8 @@ model StationCompletion {
   completedAt   DateTime @default(now())
   xpAwarded     Int
   progressValue Int      @default(0)
-  isCollab      Boolean  @default(false)
+  isCollab      Boolean  @default(false) // collab bonus paid (once)
+  proofImageUrl String?  @db.Text // live photo used for this station (no reuse)
 
   entry   ChallengeEntry   @relation(fields: [entryId], references: [id], onDelete: Cascade)
   station ChallengeStation @relation(fields: [stationId], references: [id], onDelete: Cascade)
@@ -949,6 +977,7 @@ model Referral {
   referrer User  @relation("ReferralsMade", fields: [referrerId], references: [id], onDelete: Cascade)
   referred User? @relation("ReferralsReceived", fields: [referredId], references: [id], onDelete: SetNull)
 
+  @@unique([referredId]) // one referral reward per new user (NULLs allowed)
   @@index([referrerId])
   @@index([code])
   @@map("referrals")
@@ -1055,4 +1084,68 @@ model GymCheckin {
   @@index([expiresAt])
   @@index([placeId])
   @@map("gym_checkins")
+}
+
+// ─────────────────────────────────────────────────────────
+//  PASSWORD RESET — 6-digit email OTP
+// ─────────────────────────────────────────────────────────
+model PasswordReset {
+  id        String    @id @default(uuid())
+  userId    String
+  otpHash   String    // sha256(otp + userId) — OTP itself is never stored
+  purpose   String    @default("reset") // reset | verify_email (codes can't be swapped)
+  attempts  Int       @default(0)
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("password_resets")
+}
+
+// Idempotency-Key — a retried request (timeout, double tap) runs once and
+// gets the first answer back. Kept 24 h. See src/middleware/idempotency.js
+model IdempotencyKey {
+  id           String   @id @default(uuid())
+  scope        String // "u:<userId>" or "ip:<ip>" before login
+  key          String   @db.VarChar(100)
+  requestHash  String   @db.Char(64)
+  method       String   @db.VarChar(10)
+  path         String
+  status       String   @default("in_progress") // in_progress | done
+  responseCode Int?
+  responseBody Json?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+  expiresAt    DateTime
+
+  @@unique([scope, key])
+  @@index([expiresAt])
+  @@map("idempotency_keys")
+}
+
+// One row per cron tick → a job runs on ONE server only (src/schedulers/jobLock.js)
+model JobRun {
+  id        String   @id @default(uuid())
+  name      String   @db.VarChar(100)
+  slot      String   @db.VarChar(16) // minute, e.g. 2026-11-01T13:30
+  createdAt DateTime @default(now())
+
+  @@unique([name, slot])
+  @@index([createdAt])
+  @@map("job_runs")
+}
+
+// Payment provider webhooks already handled (Razorpay retries the same event)
+model WebhookEvent {
+  id        String   @id @default(uuid())
+  provider  String   @db.VarChar(20)
+  eventId   String   @db.VarChar(100)
+  type      String?  @db.VarChar(60)
+  createdAt DateTime @default(now())
+
+  @@unique([provider, eventId])
+  @@map("webhook_events")
 }

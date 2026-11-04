@@ -1,31 +1,15 @@
 'use strict';
-const prisma    = require('../config/db');
 const xpUtils   = require('../utils/xp');
 const notifSvc  = require('./notification.service');
 
+// Fixed-amount awards (match, streak milestones …) go through the one XP
+// path: weekly / monthly leaderboards, one level table, level-up push.
 const awardXp = async (userId, action) => {
   const amount = xpUtils.xpForAction(action);
   if (!amount) return null;
-
-  const user = await prisma.user.update({
-    where: { id: userId },
-    data: {
-      xpTotal: { increment: amount },
-      xpEvents: { create: { action, xpAmount: amount } },
-    },
-    select: { xpTotal: true, level: true },
-  });
-
-  const newLevel = xpUtils.levelFromXp(user.xpTotal);
-  if (newLevel > user.level) {
-    await prisma.user.update({
-      where: { id: userId },
-      data:  { level: newLevel },
-    });
-  }
-
-  await notifSvc.notifyXpGained(userId, amount, action);
-  return { amount, newTotal: user.xpTotal, newLevel };
+  const r = await require('../controllers/xp.controller').awardXP(userId, amount, action);
+  if (r) await notifSvc.notifyXpGained(userId, amount, action);
+  return r && { amount, newTotal: r.newXpTotal, newLevel: r.newLevel.level };
 };
 
 module.exports = { awardXp };

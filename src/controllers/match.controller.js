@@ -1,13 +1,16 @@
 'use strict';
 const { v4: uuid } = require('uuid');
 const prisma = require('../config/db');
+const { withUserCounts, withUserCount } = require('../utils/relationCounts');
 const res_ = require('../utils/response');
-const { formatBuddyProfile } = require('../utils/formatUser');
+const { formatBuddyProfile, PHOTOS_SELECT } = require('../utils/formatUser');
 const { computeCompatibility, haversine } = require('../utils/compatibility');
 const notifSvc = require('../services/notification.service');
 const xpSvc = require('../services/xp.service');
 const { notBlockedWhere, isBlockedBetween } = require('./safety.controller');
+// One daily rule for likes AND super-likes (Free). Skips are unlimited.
 const DAILY_LIMIT_FREE = 5;
+const { appDate } = require('../utils/appDate');
 const DAILY_LIMIT_PRO = 999;
 
 // GET /match/discover
@@ -19,6 +22,8 @@ const DAILY_LIMIT_PRO = 999;
 //  • Already-swiped users are excluded with a relation filter instead of
 //    loading the user's whole swipe history into memory.
 const MAX_RADIUS_KM = 10;
+const MIN_RADIUS_KM = 2;
+const MAX_QUERY_SHIFT_KM = 25;
 const discover = async (req, res, next) => {
   try {
     const { activity, level, lat, lng, maxDistance = 50, page = 1, limit = 20 } = req.query;
@@ -27,17 +32,27 @@ const discover = async (req, res, next) => {
 
     const pageNum  = Math.max(1, Number(page) || 1);
     const limitNum = Math.min(50, Math.max(1, Number(limit) || 20));
-    const radiusKm = Math.min(Number(maxDistance) || MAX_RADIUS_KM, MAX_RADIUS_KM);
+    // Min 2 km: tiny radii + moving the probe point turned Discover into a
+    // "is she within 50 m of here?" location oracle
+    const radiusKm = Math.min(Math.max(Number(maxDistance) || MAX_RADIUS_KM, MIN_RADIUS_KM), MAX_RADIUS_KM);
 
-    // Location: from the app (fresh GPS) or the saved profile location
-    const myLat = lat != null && lat !== '' ? Number(lat) : (me.latitude != null ? Number(me.latitude) : null);
-    const myLng = lng != null && lng !== '' ? Number(lng) : (me.longitude != null ? Number(me.longitude) : null);
+    // Location: from the app (fresh GPS) or the saved profile location.
+    // A query point far from where I really am is ignored (no remote probing).
+    const savedLat = me.latitude != null ? Number(me.latitude) : null;
+    const savedLng = me.longitude != null ? Number(me.longitude) : null;
+    let myLat = lat != null && lat !== '' ? Number(lat) : savedLat;
+    let myLng = lng != null && lng !== '' ? Number(lng) : savedLng;
+    if (savedLat != null && Number.isFinite(myLat) && Number.isFinite(myLng) &&
+        haversine(savedLat, savedLng, myLat, myLng) > MAX_QUERY_SHIFT_KM) {
+      myLat = savedLat; myLng = savedLng;
+    }
     const hasLocation = Number.isFinite(myLat) && Number.isFinite(myLng);
 
     const where = {
       id: { not: req.user.id },
       status: 'ACTIVE',
       isBanned: false,
+      profileVisibility: 'public', // Privacy: buddies-only / hidden stay out of Discover
       // not swiped by me yet (DB-side, no big NOT IN list)
       swipesReceived: { none: { swiperId: req.user.id } },
       // not blocked in either direction
@@ -48,8 +63,9 @@ const discover = async (req, res, next) => {
 
     if (hasLocation) {
       // ~111.32 km per degree latitude; longitude shrinks with cos(lat)
-      const dLat = radiusKm / 111.32;
-      const dLng = radiusKm / (111.32 * Math.max(Math.cos((myLat * Math.PI) / 180), 0.01));
+      const box = radiusKm + 6; // snapped positions can move ~5 km
+      const dLat = box / 111.32;
+      const dLng = box / (111.32 * Math.max(Math.cos((myLat * Math.PI) / 180), 0.01));
       where.AND = [{
         OR: [
           {
@@ -69,26 +85,34 @@ const discover = async (req, res, next) => {
       orderBy: [{ lastActiveAt: 'desc' }], // recently active people first
       take: limitNum * 2,
       skip: (pageNum - 1) * limitNum * 2,
-      include: { _count: { select: { matchesA: true, sessionsAsUser: true } } },
+      include: { photos: PHOTOS_SELECT },
     });
+    await withUserCounts(users); // counts for these ≤40 people only
     const boostedUserIds = new Set(
       users.filter(u => u.boostExpiresAt && u.boostExpiresAt > now).map(u => u.id)
     );
+    // New members get 48 h of extra visibility (right after paid boosts)
+    const NEW_USER_MS = 48 * 3600e3;
+    const isNewUser = (u) => !!u.createdAt && now - new Date(u.createdAt) < NEW_USER_MS;
     const meForDistance = hasLocation ? { ...me, latitude: myLat, longitude: myLng } : me;
 
     // Compute compat + distance, apply geo filter
     const results = users
       .map(u => {
         const compatibilityScore = computeCompatibility(me, u);
+        // Other people's position is snapped to a grid (~1 km, ~5 km if they
+        // turned location sharing off) before ANY distance maths
+        const grid = u.shareLocation === false ? 0.05 : 0.01;
+        const snap = (v) => Math.round(Number(v) / grid) * grid;
         const distanceKm = meForDistance.latitude != null && meForDistance.longitude != null &&
             u.latitude != null && u.longitude != null
-          ? haversine(Number(meForDistance.latitude), Number(meForDistance.longitude), Number(u.latitude), Number(u.longitude))
+          ? haversine(Number(meForDistance.latitude), Number(meForDistance.longitude), snap(u.latitude), snap(u.longitude))
           : null;
         const isOnline = u.lastActiveAt
           ? (Date.now() - new Date(u.lastActiveAt).getTime()) < 2 * 60 * 1000
           : false;
         const isBoosted = boostedUserIds.has(u.id);
-        return { ...u, compatibilityScore, distanceKm, isOnline, isBoosted };
+        return { ...u, compatibilityScore, distanceKm, isOnline, isBoosted, isNew: isNewUser(u) };
       })
       .filter(u => {
         // Hard cap — 10km max (maxDistance from query, never more than 10)
@@ -97,6 +121,8 @@ const discover = async (req, res, next) => {
       .sort((a, b) => {
         // 0th priority — boosted profiles always first
         if (a.isBoosted !== b.isBoosted) return b.isBoosted ? 1 : -1;
+        // 0.5 — new members (first 48 h)
+        if (a.isNew !== b.isNew) return b.isNew ? 1 : -1;
 
         // 1st priority — same primary activity as logged in user
         const myActivity = me.primaryActivity;
@@ -118,6 +144,7 @@ const discover = async (req, res, next) => {
         distanceKm: u.distanceKm,
         isOnline: u.isOnline,
         isBoosted: u.isBoosted,
+        isNew: u.isNew,
       }))
       .slice(0, limitNum);
 
@@ -126,6 +153,26 @@ const discover = async (req, res, next) => {
 };
 
 // POST /match/like
+// Influencers: Elite plan only + monthly session limit. Shared by every
+// path that can create a match (like, swipe like/super-like).
+const influencerGate = async (req, targetId, target = null) => {
+  const t = target || await prisma.user.findUnique({ where: { id: targetId }, select: { isInfluencer: true } });
+  if (!t?.isInfluencer) return null;
+  if (req.user.subscriptionPlan !== 'elite') {
+    return { status: 403, message: 'Upgrade to Elite plan to connect with Influencers',
+      extra: { code: 'ELITE_REQUIRED', targetId } };
+  }
+  // (was never imported here → every Elite like on an influencer crashed with a 500)
+  const { checkInfluencerSessionLimit } = require('./influencer.controller');
+  const limitCheck = await checkInfluencerSessionLimit(req.user.id, targetId);
+  if (!limitCheck.allowed) {
+    return { status: 429,
+      message: `You've used all ${limitCheck.limit} sessions with this influencer this month. Available next month.`,
+      extra: { code: 'SESSION_LIMIT_REACHED', ...limitCheck } };
+  }
+  return null;
+};
+
 const like = async (req, res, next) => {
   try {
     const { targetUserId } = req.body;
@@ -133,9 +180,11 @@ const like = async (req, res, next) => {
 
     if (targetUserId === myId) return res_.error(res, 'Cannot like yourself', 400);
     if (await isBlockedBetween(myId, targetUserId)) return res_.error(res, 'User not found', 404);
+    const gate = await influencerGate(req, targetUserId);
+    if (gate) return res_.error(res, gate.message, gate.status, gate.extra);
 
     // Daily swipe quota
-    const today = new Date().toISOString().slice(0, 10);
+    const today = appDate();
     const daily = await prisma.dailySwipe.upsert({
       where: { userId_date: { userId: myId, date: today } },
       update: { count: { increment: 1 } },
@@ -143,7 +192,8 @@ const like = async (req, res, next) => {
     });
     const limit = req.user.subscriptionPlan === 'free' ? DAILY_LIMIT_FREE : DAILY_LIMIT_PRO;
     if (daily.count > limit) {
-      return res_.error(res, `Daily swipe limit (${limit}) reached — upgrade to Pro for unlimited swipes`, 429);
+      return res_.error(res, `Daily like limit (${limit}) reached — upgrade to Pro for unlimited likes`, 429,
+        { code: 'DAILY_LIMIT_REACHED' });
     }
 
     // Upsert the swipe
@@ -168,14 +218,25 @@ const like = async (req, res, next) => {
       if (!existing) {
         const matchId = uuid();
         const chatId = uuid();
-        await prisma.$transaction([
-          prisma.match.create({ data: { id: matchId, userAId, userBId } }),
-          prisma.chat.create({
-            data: {
-              id: chatId, matchId, userAId, userBId,
-            },
-          }),
-        ]);
+        try {
+          await prisma.$transaction([
+            prisma.match.create({ data: { id: matchId, userAId, userBId } }),
+            prisma.chat.create({
+              data: {
+                id: chatId, matchId, userAId, userBId,
+              },
+            }),
+          ]);
+        } catch (e) {
+          // Both liked at the same moment → the other request created it.
+          // Not an error: reply "matched" with the existing chat.
+          if (e.code !== 'P2002') throw e;
+          const m = await prisma.match.findUnique({
+            where: { userAId_userBId: { userAId, userBId } }, include: { chat: { select: { id: true } } },
+          });
+          if (!m) throw e;
+          return res_.success(res, { matched: true, matchId: m.id, chatId: m.chat?.id ?? null });
+        }
 
         await notifSvc.notifyMatch(myId, targetUserId, matchId);
         await Promise.all([
@@ -183,7 +244,7 @@ const like = async (req, res, next) => {
           xpSvc.awardXp(targetUserId, 'buddy_matched'),
         ]);
 
-        return res_.success(res, { matched: true, matchId });
+        return res_.success(res, { matched: true, matchId, chatId });
       }
     }
 
@@ -207,24 +268,25 @@ const skip = async (req, res, next) => {
 // GET /match/buddies
 const getBuddies = async (req, res, next) => {
   try {
-    const { page = 1, limit = 20 } = req.query;
+    const { page, limit, skip } = require('../utils/paging').pageParams(req.query, { def: 20, max: 100 });
     const myId = req.user.id;
-    const skip = (Number(page) - 1) * Number(limit);
 
     const [matches, total] = await Promise.all([
       prisma.match.findMany({
-        where: { OR: [{ userAId: myId }, { userBId: myId }] },
+        // active only — removed / blocked buddies were still listed
+        where: { status: 'active', OR: [{ userAId: myId }, { userBId: myId }] },
         include: {
-          userA: { include: { _count: { select: { matchesA: true, sessionsAsUser: true } } } },
-          userB: { include: { _count: { select: { matchesA: true, sessionsAsUser: true } } } },
+          userA: { include: { photos: PHOTOS_SELECT } },
+          userB: { include: { photos: PHOTOS_SELECT } },
         },
         skip, take: Number(limit),
         orderBy: { createdAt: 'desc' },
       }),
-      prisma.match.count({ where: { OR: [{ userAId: myId }, { userBId: myId }] } }),
+      prisma.match.count({ where: { status: 'active', OR: [{ userAId: myId }, { userBId: myId }] } }),
     ]);
 
     const me = await prisma.user.findUnique({ where: { id: myId } });
+    await withUserCounts(matches.map(m => (m.userAId === myId ? m.userB : m.userA)));
     const buddies = matches.map(m => {
       const buddy = m.userAId === myId ? m.userB : m.userA;
       return formatBuddyProfile(buddy, {
@@ -241,10 +303,15 @@ const removeBuddy = async (req, res, next) => {
   try {
     const myId = req.user.id;
     const buddyId = req.params.buddyId;
-    const [a, b] = [myId, buddyId].sort();
-
+    // Matches are stored in either order (swipe/accept don't sort) — delete
+    // both, or "remove buddy" silently did nothing half the time
     await prisma.match.deleteMany({
-      where: { userAId: a, userBId: b },
+      where: { OR: [{ userAId: myId, userBId: buddyId }, { userAId: buddyId, userBId: myId }] },
+    });
+    // Clear the likes too: re-matching needs two fresh likes (otherwise
+    // remove → like again re-created the match and paid match XP every time)
+    await prisma.swipe.deleteMany({
+      where: { OR: [{ swiperId: myId, swipedId: buddyId }, { swiperId: buddyId, swipedId: myId }] },
     });
     return res_.success(res, null, 'Buddy removed');
   } catch (e) { next(e); }
@@ -264,63 +331,50 @@ const swipe = async (req, res, next) => {
     // Get target user
     const target = await prisma.user.findUnique({
       where:  { id: targetId },
-      select: { id: true, isInfluencer: true, subscriptionPlan: true },
+      select: { id: true, firstName: true, isInfluencer: true, subscriptionPlan: true },
     });
     if (!target) return res_.error(res, 'User not found', 404);
+    const previous = await prisma.swipe.findUnique({
+      where: { swiperId_swipedId: { swiperId: userId, swipedId: targetId } },
+      select: { action: true },
+    });
+    const alreadyLiked = previous && ['like', 'super_like'].includes(previous.action);
 
-    // ── ELITE CHECK — Influencer match requires Elite plan ─
-    if (target.isInfluencer && action === 'like') {
-      if (req.user.subscriptionPlan !== 'elite') {
-        return res_.error(res,
-          'Upgrade to Elite plan to connect with Influencers',
-          403,
-          { code: 'ELITE_REQUIRED', targetId }
-        );
-      }
-
-      // Check monthly session limit
-      const limitCheck = await checkInfluencerSessionLimit(userId, targetId);
-      if (!limitCheck.allowed) {
-        return res_.error(res,
-          `You've used all ${limitCheck.limit} sessions with this influencer this month. Available next month.`,
-          429,
-          { code: 'SESSION_LIMIT_REACHED', ...limitCheck }
-        );
-      }
+    // ── ELITE CHECK — Influencer match requires Elite plan (like AND super-like) ─
+    if (action === 'like' || action === 'super_like') {
+      const gate = await influencerGate(req, targetId, target);
+      if (gate) return res_.error(res, gate.message, gate.status, gate.extra);
     }
 
-    // Daily swipe limit check (Free users)
-    if (req.user.subscriptionPlan === 'free') {
-      const today = new Date();
-      today.setHours(0, 0, 0, 0);
-      // DailySwipe.date is a 'YYYY-MM-DD' String (see upsert below)
-      const dailySwipe = await prisma.dailySwipe.findUnique({
-        where: { userId_date: { userId, date: new Date().toISOString().slice(0, 10) } },
+    // Daily like limit (likes + super-likes; skips are free) — counted first,
+    // atomically, so parallel taps can't go over
+    const isLike = action === 'like' || action === 'super_like';
+    if (isLike) {
+      const daily = await prisma.dailySwipe.upsert({
+        where:  { userId_date: { userId, date: appDate() } },
+        update: { count: { increment: 1 } },
+        create: { id: uuid(), userId, date: appDate(), count: 1 },
       });
-      if (dailySwipe && dailySwipe.count >= 10)
-        return res_.error(res, 'Daily swipe limit reached. Upgrade to Pro for unlimited swipes.', 429,
+      const limit = req.user.subscriptionPlan === 'free' ? DAILY_LIMIT_FREE : DAILY_LIMIT_PRO;
+      if (daily.count > limit) {
+        return res_.error(res, `Daily like limit (${limit}) reached — upgrade to Pro for unlimited likes`, 429,
           { code: 'DAILY_LIMIT_REACHED' });
+      }
     }
 
     // Record swipe
     await prisma.swipe.upsert({
       where:  { swiperId_swipedId: { swiperId: userId, swipedId: targetId } },
-      update: { action },
+      // re-date super-likes so the daily super-like limit counts them
+      update: { action, ...(action === 'super_like' && { createdAt: new Date() }) },
       create: { id: uuid(), swiperId: userId, swipedId: targetId, action },
     });
 
-    // Update daily swipe count
-    const today = new Date(); today.setHours(0,0,0,0);
-    await prisma.dailySwipe.upsert({
-      where:  { userId_date: { userId, date: new Date().toISOString().slice(0, 10) } },
-      update: { count: { increment: 1 } },
-      create: { id: uuid(), userId, date: new Date().toISOString().slice(0, 10), count: 1 },
-    });
 
-    // Deduct 1 chat token for like (to start chat)
-    if (action === 'like') {
-      await prisma.user.update({
-        where: { id: userId },
+    // Deduct 1 chat token for a NEW like (to start chat) — never below 0
+    if (action === 'like' && !alreadyLiked) {
+      await prisma.user.updateMany({
+        where: { id: userId, chatTokens: { gt: 0 } },
         data:  { chatTokens: { decrement: 1 } },
       });
     }
@@ -353,7 +407,7 @@ const swipe = async (req, res, next) => {
           });
 
           // Create chat
-          await prisma.chat.create({
+          const chat = await prisma.chat.create({
             data: {
               id:      uuid(),
               matchId: match.id,
@@ -363,15 +417,16 @@ const swipe = async (req, res, next) => {
           });
 
           // Notify both
-          await _notify(userId,  `🤝 You matched with ${target.id}!`, 'new_match', { matchId: match.id });
+          await _notify(userId,  `🤝 You matched with ${target.firstName || 'a new buddy'}!`, 'new_match', { matchId: match.id });
           await _notify(targetId, `🤝 You have a new match!`,          'new_match', { matchId: match.id });
 
-          return res_.success(res, { matched: true, matchId: match.id }, 'It\'s a match! 🎉');
+          // chatId lets the app open the chat directly (it was guessing ids)
+          return res_.success(res, { matched: true, matchId: match.id, chatId: chat.id }, 'It\'s a match! 🎉');
         }
       }
 
-      // Not mutual yet — notify target of like (match request)
-      await _notify(targetId,
+      // Not mutual yet — notify target of like (match request), only once
+      if (!alreadyLiked) await _notify(targetId,
         `Someone wants to train with you! Check your match requests.`,
         'match_request',
         { fromUserId: userId }
@@ -393,6 +448,7 @@ const getMatchRequests = async (req, res, next) => {
       where: {
         swipedId: userId,
         action:   { in: ['like', 'super_like'] },
+        swiper:   { status: 'ACTIVE', isBanned: false, ...notBlockedWhere(userId) },
       },
       include: {
         swiper: {
@@ -401,18 +457,22 @@ const getMatchRequests = async (req, res, next) => {
             avatarUrl: true, city: true, primaryActivity: true,
             level: true, trustScore: true, isInfluencer: true,
             instagramHandle: true, instagramFollowers: true,
+            createdAt: true, experienceLevel: true, bio: true,
+            photos: PHOTOS_SELECT,
           },
         },
       },
       orderBy: { createdAt: 'desc' },
+      take: 200, // newest 200 — loading every like ever received doesn't scale
     });
+    const likerIds = likes.map(l => l.swiperId);
 
-    // Filter out already matched
+    // Filter out already matched (only among these likers)
     const existingMatches = await prisma.match.findMany({
       where: {
         OR: [
-          { userAId: userId },
-          { userBId: userId },
+          { userAId: userId, userBId: { in: likerIds } },
+          { userBId: userId, userAId: { in: likerIds } },
         ],
         status: 'active',
       },
@@ -426,7 +486,7 @@ const getMatchRequests = async (req, res, next) => {
 
     // Filter: only pending (not yet matched, not rejected by me)
     const mySwipes = await prisma.swipe.findMany({
-      where:  { swiperId: userId },
+      where:  { swiperId: userId, swipedId: { in: likerIds } },
       select: { swipedId: true },
     });
     const iSwiped = new Set(mySwipes.map(s => s.swipedId));
@@ -439,7 +499,11 @@ const getMatchRequests = async (req, res, next) => {
     return res_.success(res, {
       requests: pendingRequests.map(l => ({
         swipeId:    l.id,
-        user:       l.swiper,
+        user:       {
+          ...l.swiper,
+          trustScore: Number(l.swiper.trustScore),
+          photos: (l.swiper.photos || []).map(p => p.url),
+        },
         isSuperLike: l.action === 'super_like',
         createdAt:  l.createdAt,
       })),
@@ -456,11 +520,20 @@ const acceptRequest = async (req, res, next) => {
     const userId      = req.user.id;
 
     const swipe = await prisma.swipe.findUnique({ where: { id: swipeId } });
-    if (!swipe) return res_.error(res, 'Request not found', 404);
+    // A "skip" is not a request — accepting it would match you with someone who passed on you
+    if (!swipe || !['like', 'super_like'].includes(swipe.action)) {
+      return res_.error(res, 'Request not found', 404);
+    }
     if (swipe.swipedId !== userId)
       return res_.error(res, 'Not your request', 403);
 
     const fromUserId = swipe.swiperId;
+    if (await isBlockedBetween(userId, fromUserId)) return res_.error(res, 'Request not found', 404);
+    const existing = await prisma.match.findFirst({
+      where: { OR: [{ userAId: fromUserId, userBId: userId }, { userAId: userId, userBId: fromUserId }] },
+      select: { id: true, status: true },
+    });
+    if (existing) return res_.error(res, 'You are already buddies', 409, { matchId: existing.id });
 
     // Create match
     const match = await prisma.match.create({
@@ -473,7 +546,7 @@ const acceptRequest = async (req, res, next) => {
     });
 
     // Create chat
-    await prisma.chat.create({
+    const chat = await prisma.chat.create({
       data: {
         id:      uuid(),
         matchId: match.id,
@@ -499,6 +572,7 @@ const acceptRequest = async (req, res, next) => {
     return res_.success(res, {
       matched: true,
       matchId: match.id,
+      chatId:  chat.id,
     }, 'Match accepted! 🎉');
   } catch (e) { next(e); }
 };
@@ -551,15 +625,20 @@ const boost = async (req, res, next) => {
       return res_.error(res, `Not enough tokens (need ${BOOST_COST_TOKENS}, have ${user.chatTokens})`, 402);
     }
 
-    const boostExpiresAt = new Date(Date.now() + BOOST_DURATION_MS);
+    const now = new Date();
+    const boostExpiresAt = new Date(now.getTime() + BOOST_DURATION_MS);
 
-    await prisma.user.update({
-      where: { id: req.user.id },
-      data: {
-        chatTokens:    { decrement: BOOST_COST_TOKENS },
-        boostExpiresAt,
+    // Atomic: pay + boost only if still enough tokens and not boosted
+    // (5 parallel taps used to charge 5× and go negative)
+    const claim = await prisma.user.updateMany({
+      where: {
+        id: req.user.id,
+        chatTokens: { gte: BOOST_COST_TOKENS },
+        OR: [{ boostExpiresAt: null }, { boostExpiresAt: { lte: now } }],
       },
+      data: { chatTokens: { decrement: BOOST_COST_TOKENS }, boostExpiresAt },
     });
+    if (claim.count === 0) return res_.error(res, 'Already boosted or not enough tokens', 409);
 
     return res_.success(res, {
       boostExpiresAt,
@@ -601,11 +680,18 @@ const checkSuperLikeLimit = async (req, res, next) => {
     const limit = req.user.subscriptionPlan === 'free'
       ? SUPER_LIKE_LIMIT_FREE
       : SUPER_LIKE_LIMIT_PAID;
-    const since = new Date(); since.setHours(0, 0, 0, 0);
-    const used = await prisma.swipe.count({
-      where: { swiperId: req.user.id, action: 'super_like', createdAt: { gte: since } },
+    // Atomic daily counter (count-then-write let parallel taps exceed the limit)
+    const date = appDate();
+    await prisma.dailySwipe.upsert({
+      where:  { userId_date: { userId: req.user.id, date } },
+      update: {},
+      create: { id: uuid(), userId: req.user.id, date, count: 0, superLikes: 0 },
+    }).catch(() => {}); // parallel create → unique clash is fine
+    const claim = await prisma.dailySwipe.updateMany({
+      where: { userId: req.user.id, date, superLikes: { lt: limit } },
+      data:  { superLikes: { increment: 1 } },
     });
-    if (used >= limit) {
+    if (claim.count === 0) {
       return res_.error(res,
         `Daily Super Like limit reached (${limit}/day).`
           + (req.user.subscriptionPlan === 'free' ? ' Upgrade for more.' : ''),
@@ -616,17 +702,9 @@ const checkSuperLikeLimit = async (req, res, next) => {
 };
 
 // ── Helper ────────────────────────────────────────────────
-const _notify = async (userId, message, type, data = {}) => {
-  try {
-    await prisma.notification.create({
-      data: {
-        id: uuid(), userId, type,
-        title: message, message: message,
-        data: JSON.stringify(data), isRead: false,
-      },
-    });
-  } catch (_) {}
-};
+// Uses the notification service (valid type, push, quiet hours, daily cap)
+const _notify = (userId, message, kind, data = {}) =>
+  require('../services/notification.service').notifyKind(userId, kind, message, data).catch(() => null);
 
 
 module.exports = {

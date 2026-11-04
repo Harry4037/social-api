@@ -1,6 +1,6 @@
 'use strict';
 const { PrismaClient } = require('@prisma/client');
-const bcrypt = require('bcryptjs');
+const { hashPassword, verifyPassword } = require('../src/utils/password');
 const { v4: uuid } = require('uuid');
 
 const prisma = new PrismaClient();
@@ -14,19 +14,19 @@ async function main() {
       id: uuid(), slug: 'free', name: 'Free',
       description: 'Get started — limited swipes',
       price: 0, interval: 'monthly', isPopular: false,
-      features: JSON.stringify(['5 swipes/day','Basic matching','Chat with tokens']),
+      features: JSON.stringify(['5 likes a day (incl. 1 super-like)','20 chat tokens to start','Chat with tokens']),
     },
     {
       id: uuid(), slug: 'pro', name: 'Pro',
       description: 'Serious trainers only',
       price: 29900, interval: 'monthly', isPopular: true,
-      features: JSON.stringify(['Unlimited swipes','Priority matching','20 tokens/month','Pro badge','See who liked you']),
+      features: JSON.stringify(['Unlimited likes','5 super-likes a day','Up to 50 chat tokens a month','1 streak freeze every 30 days','Pro badge']),
     },
     {
       id: uuid(), slug: 'elite', name: 'Elite',
-      description: 'The full FitConnect experience',
+      description: 'The full Seshlly experience',
       price: 59900, interval: 'monthly', isPopular: false,
-      features: JSON.stringify(['Everything in Pro','Influencer profile','Advanced analytics','Custom gym badge','50 tokens/month','Priority support']),
+      features: JSON.stringify(['Everything in Pro','Connect with verified influencers','3 sessions a month per influencer']),
     },
   ];
 
@@ -39,7 +39,7 @@ async function main() {
   }
 
   // ── Demo Users ─────────────────────────────────────────
-  const hash = await bcrypt.hash('Test@1234', 12);
+  const hash = await hashPassword('Test@1234');
 
   const users = [
     {
@@ -96,7 +96,11 @@ async function main() {
   console.log('   Demo login: alex@demo.com / Test@1234');
 
   // ── Super Admin ────────────────────────────────────────
-  const adminHash = await bcrypt.hash('Admin@123456', 12);
+  // Never a fixed, publicly known password: use SEED_ADMIN_PASSWORD or a
+  // random one printed once. (Everyone who saw the old login hint knew it.)
+  const adminPassword = process.env.SEED_ADMIN_PASSWORD ||
+    require('crypto').randomBytes(9).toString('base64').replace(/[^a-zA-Z0-9]/g, 'x') + 'A1';
+  const adminHash = await hashPassword(adminPassword);
   const admins = [
     { email: 'superadmin@fitconnect.com', firstName: 'Super', lastName: 'Admin', role: 'SUPER_ADMIN' },
     { email: 'admin@fitconnect.com',      firstName: 'Admin', lastName: 'User',  role: 'ADMIN'       },
@@ -107,11 +111,11 @@ async function main() {
     await prisma.adminUser.upsert({
       where:  { email: a.email },
       update: {},
-      create: { id: uuid(), ...a, passwordHash: adminHash },
+      create: { id: uuid(), ...a, passwordHash: adminHash, isActive: true, status: 'active' },
     });
   }
   console.log(`✅  Seeded ${admins.length} admin accounts`);
-  console.log('   Admin login: superadmin@fitconnect.com / Admin@123456');
+  console.log(`   Admin login: superadmin@fitconnect.com / ${adminPassword}  (change it + turn on 2-factor)`);
 }
 
 main()

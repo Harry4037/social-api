@@ -61,6 +61,7 @@ const io = new Server(server, {
 });
 initSocket(io);
 app.set('io', io);
+require('./controllers/session.controller').setIo(io); // cron jobs update chat cards live
 
 // ── Core Middleware ───────────────────────────────────────
 // Behind nginx / a cloud load balancer the real client IP is in
@@ -70,12 +71,36 @@ app.set('trust proxy', Number(process.env.TRUST_PROXY ?? 1));
 app.use(helmet({ crossOriginResourcePolicy: { policy: 'cross-origin' } }));
 app.use(cors({ origin: allowedOrigins, credentials: true }));
 app.use(compression());
-app.use(express.json({ limit: '2mb' }));
+app.use(express.json({
+  limit: '2mb',
+  // payment webhooks are signed over the exact bytes → keep them
+  verify: (req, _res, buf) => { if (req.originalUrl.includes('/webhook')) req.rawBody = Buffer.from(buf); },
+}));
 app.use(express.urlencoded({ extended: true, limit: '2mb' }));
+// Every list endpoint: page ≥ 1 and 1 ≤ limit ≤ 100 (garbage values used to
+// reach Prisma → 500s, and limit=1000000 dumped whole tables)
+app.use((req, _res, next) => {
+  const q = req.query || {};
+  if (q.page !== undefined)  q.page  = String(Math.max(1, Math.floor(Number(q.page)) || 1));
+  if (q.limit !== undefined) q.limit = String(Math.min(100, Math.max(1, Math.floor(Number(q.limit)) || 20)));
+  next();
+});
 app.use(morgan(process.env.NODE_ENV === 'production' ? 'combined' : 'dev', {
   stream: { write: (m) => logger.info(m.trim()) },
 }));
 app.use('/uploads', express.static(path.join(process.cwd(), process.env.UPLOAD_DIR || 'uploads')));
+
+// ── security.txt (RFC 9116) — how researchers report a vulnerability ──
+app.get('/.well-known/security.txt', (_req, res) => {
+  const expires = new Date(Date.now() + 365 * 24 * 3600e3).toISOString();
+  res.type('text/plain').send([
+    `Contact: mailto:${process.env.SECURITY_CONTACT || 'security@seshlly.com'}`,
+    `Expires: ${expires}`,
+    'Preferred-Languages: en, hi',
+    'Policy: Please give us 90 days to fix an issue before publishing it. Do not access other users\' data.',
+    '',
+  ].join('\n'));
+});
 
 // ── Health Check ──────────────────────────────────────────
 app.get('/health', async (_req, res) => {
@@ -91,6 +116,8 @@ app.get('/health', async (_req, res) => {
 const API = `/api/${process.env.API_VERSION || 'v1'}`;
 
 app.use(defaultLimiter);
+// Retries with the same Idempotency-Key run once (see middleware/idempotency.js)
+app.use(require('./middleware/idempotency').idempotency);
 
 // Auth (public)
 app.use(`${API}/auth`,              authRoutes);
@@ -132,6 +159,8 @@ app.use(errorHandler);
 const PORT = process.env.PORT || 5000;
 
 const startServer = async () => {
+  // Weak / missing secrets in production → stop (anyone could forge logins)
+  if (!require('./config/secrets').assertSecrets(logger)) process.exit(1);
   try {
     await prisma.$connect();
     logger.info('✅  Database connected');
@@ -157,11 +186,15 @@ const shutdown = async (signal) => {
   });
 };
 
-process.on('SIGTERM', () => shutdown('SIGTERM'));
-process.on('SIGINT',  () => shutdown('SIGINT'));
-process.on('unhandledRejection', (reason) => logger.error('Unhandled rejection: ' + reason));
-process.on('uncaughtException',  (err)    => { logger.error('Uncaught exception: ' + err.message); process.exit(1); });
+// Only start listening when run directly (`node src/server.js`).
+// Tests `require()` this file to get the Express app without a live port.
+if (require.main === module) {
+  process.on('SIGTERM', () => shutdown('SIGTERM'));
+  process.on('SIGINT',  () => shutdown('SIGINT'));
+  process.on('unhandledRejection', (reason) => logger.error('Unhandled rejection: ' + reason));
+  process.on('uncaughtException',  (err)    => { logger.error('Uncaught exception: ' + err.message); process.exit(1); });
 
-startServer();
+  startServer();
+}
 
 module.exports = { app, server };

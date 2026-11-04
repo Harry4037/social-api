@@ -30,13 +30,31 @@ const getActiveAd = async (req, res, next) => {
   } catch(e) { next(e); }
 };
 
+// Count each user at most once per ad per day (brands pay per click —
+// one user tapping 20× used to add 20 clicks). In-memory per server process.
+const _seen = new Map(); // key → expiry ms
+const _onceToday = (kind, adId, userId) => {
+  const now = Date.now();
+  if (_seen.size > 200000) for (const [k, exp] of _seen) if (exp < now) _seen.delete(k);
+  const key = `${kind}|${adId}|${userId}|${new Date().toISOString().slice(0, 10)}`;
+  if ((_seen.get(key) || 0) > now) return false;
+  _seen.set(key, now + 24 * 3600e3);
+  return true;
+};
+const _activeAdWhere = (id) => {
+  const now = new Date();
+  return { id, isActive: true, startDate: { lte: now }, endDate: { gte: now } };
+};
+
 // ── POST /api/feed/ads/:id/impression ────────────────────
 const trackImpression = async (req, res, next) => {
   try {
-    await prisma.brandAd.update({
-      where: { id: req.params.id },
-      data:  { impressions: { increment: 1 } },
-    });
+    if (_onceToday('imp', req.params.id, req.user.id)) {
+      await prisma.brandAd.updateMany({
+        where: _activeAdWhere(req.params.id),
+        data:  { impressions: { increment: 1 } },
+      });
+    }
     return res_.success(res, null);
   } catch(e) { next(e); }
 };
@@ -44,10 +62,12 @@ const trackImpression = async (req, res, next) => {
 // ── POST /api/feed/ads/:id/click ─────────────────────────
 const trackClick = async (req, res, next) => {
   try {
-    await prisma.brandAd.update({
-      where: { id: req.params.id },
-      data:  { clicks: { increment: 1 } },
-    });
+    if (_onceToday('click', req.params.id, req.user.id)) {
+      await prisma.brandAd.updateMany({
+        where: _activeAdWhere(req.params.id),
+        data:  { clicks: { increment: 1 } },
+      });
+    }
     return res_.success(res, null);
   } catch(e) { next(e); }
 };

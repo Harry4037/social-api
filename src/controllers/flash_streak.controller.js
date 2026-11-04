@@ -45,6 +45,16 @@ const recordFlashSent = async (req, res, next) => {
 
     if (!buddyId) return res_.error(res, 'buddyId required', 400);
     if (buddyId === senderId) return res_.error(res, 'Cannot send to yourself', 400);
+    // Streaks only between active buddies (any id was accepted before)
+    const match = await prisma.match.findFirst({
+      where: { status: 'active', OR: [
+        { userAId: senderId, userBId: buddyId }, { userAId: buddyId, userBId: senderId }] },
+      select: { id: true },
+    });
+    const { isBlockedBetween } = require('./safety.controller');
+    if (!match || await isBlockedBetween(senderId, buddyId)) {
+      return res_.error(res, 'You can only keep a streak with your buddies', 403);
+    }
 
     const streak  = await _getOrCreateStreak(senderId, buddyId);
     const now     = new Date();
@@ -92,7 +102,22 @@ const recordFlashSent = async (req, res, next) => {
         ? { userASentAt: now }
         : { userBSentAt: now };
 
-    // ── Both sent → increment streak ──────────────────────
+    // ── Both sent → increment streak (max once per day) ───
+    const { dayBounds } = require('./session.controller');
+    const countedToday = streak.lastStreakAt &&
+      new Date(streak.lastStreakAt) >= dayBounds(now).start;
+    if (buddySent && countedToday) {
+      await prisma.flashStreak.update({
+        where: { id: streak.id },
+        data: { lastWindowStart: now, userASentAt: null, userBSentAt: null },
+      });
+      return res_.success(res, {
+        currentStreak:  streak.currentStreak,
+        longestStreak:  streak.longestStreak,
+        waitingForBuddy: false,
+        message: 'Streak already counted today — keep it going tomorrow! 🔥',
+      });
+    }
     if (buddySent) {
       const newStreak    = streak.currentStreak + 1;
       const newLongest   = Math.max(newStreak, streak.longestStreak);

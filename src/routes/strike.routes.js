@@ -16,7 +16,7 @@ router.use(authenticate);
 // Send Strike 2
 router.post('/', [
   body('matchId').isUUID(),
-  body('imageUrl').isURL(),
+  body('imageUrl').custom(require('../utils/mediaUrl').mediaUrlValidator),
   body('caption').optional().isString().isLength({ max: 150 }),
 ], validate, strike.sendStrike);
 

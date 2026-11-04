@@ -17,9 +17,14 @@ const adminAuth = async (req, res, next) => {
 
     const admin = await prisma.adminUser.findUnique({
       where: { id: payload.adminId },
-      select: { id: true, email: true, role: true, firstName: true, lastName: true, isActive: true },
+      select: { id: true, email: true, role: true, firstName: true, lastName: true, isActive: true, status: true, passwordChangedAt: true },
     });
-    if (!admin || !admin.isActive) return error(res, 'Admin account not accessible', 403);
+    if (!admin || !admin.isActive || admin.status === 'revoked') return error(res, 'Admin account not accessible', 403);
+    // Password changed after this token was issued → log in again
+    const pv = admin.passwordChangedAt ? new Date(admin.passwordChangedAt).getTime() : 0;
+    if ((payload.pv || 0) !== pv) {
+      return error(res, 'Session expired — please log in again', 401);
+    }
 
     req.admin = admin;
     next();
@@ -37,6 +42,16 @@ const requireRole = (...roles) => (req, res, next) => {
   next();
 };
 
+// Never store passwords / secrets in the audit log
+const _redact = (body) => {
+  if (!body || typeof body !== 'object') return body;
+  const out = {};
+  for (const [k, v] of Object.entries(body)) {
+    out[k] = /pass(word)?|secret|token|otp/i.test(k) ? '[redacted]' : v;
+  }
+  return out;
+};
+
 /** Log admin action to audit_logs table */
 const audit = (action, entityType) => async (req, res, next) => {
   res.on('finish', async () => {
@@ -48,7 +63,7 @@ const audit = (action, entityType) => async (req, res, next) => {
             action,
             entityType,
             entityId:   req.params.id || req.params.userId || null,
-            details:    { body: req.body, query: req.query },
+            details:    { body: _redact(req.body), query: req.query },
             ip:         req.ip,
           },
         });

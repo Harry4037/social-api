@@ -15,9 +15,9 @@ const initSocket = (io) => {
       const payload = verifyAccess(token);
       const user = await prisma.user.findUnique({
         where:  { id: payload.sub },
-        select: { id: true, firstName: true, isBanned: true },
+        select: { id: true, firstName: true, isBanned: true, status: true },
       });
-      if (!user || user.isBanned) return next(new Error('Unauthorized'));
+      if (!user || user.isBanned || user.status === 'BANNED') return next(new Error('Unauthorized'));
       socket.userId = user.id;
       socket.userName = user.firstName;
       next();
@@ -36,26 +36,40 @@ const initSocket = (io) => {
 
     // Update lastActiveAt
     prisma.user.update({ where: { id: uid }, data: { lastActiveAt: new Date() } }).catch(() => {});
-    io.emit('user:online', { userId: uid });
+    // Personal room → lets the server reach every device of this user
+    socket.join(`user:${uid}`);
+    // (Presence was broadcast to EVERY connected client — including people
+    // who blocked this user. Nothing in the app listens to it, so it's gone.)
 
     // ── Join a chat room ───────────────────────────────
-    socket.on('chat:join', async ({ chatId }) => {
+    socket.on('chat:join', async ({ chatId } = {}) => {
+      if (typeof chatId !== 'string' || chatId.length > 64) return;
       const chat = await prisma.chat.findFirst({
-        where: { id: chatId, OR: [{ userAId: uid }, { userBId: uid }] },
-      });
-      if (chat) socket.join(`chat:${chatId}`);
+        where: { id: chatId, OR: [{ userAId: uid }, { userBId: uid }, { members: { some: { userId: uid } } }] },
+      }).catch(() => null);
+      if (chat && !chat.isGroup && chat.userAId && chat.userBId) {
+        const { isBlockedBetween } = require('../controllers/safety.controller');
+        if (await isBlockedBetween(chat.userAId, chat.userBId).catch(() => true)) return;
+      }
+      if (chat) {
+        socket.join(`chat:${chatId}`);
+        (socket.data.chats ||= new Set()).add(chatId);
+      }
     });
 
-    socket.on('chat:leave', ({ chatId }) => {
+    socket.on('chat:leave', ({ chatId } = {}) => {
       socket.leave(`chat:${chatId}`);
+      socket.data.chats?.delete(chatId);
     });
 
-    // ── Typing indicators ──────────────────────────────
-    socket.on('typing:start', ({ chatId }) => {
+    // ── Typing indicators (only in chats this socket really joined) ──
+    socket.on('typing:start', ({ chatId } = {}) => {
+      if (!socket.data.chats?.has(chatId)) return;
       socket.to(`chat:${chatId}`).emit('typing:start', { userId: uid, chatId });
     });
 
-    socket.on('typing:stop', ({ chatId }) => {
+    socket.on('typing:stop', ({ chatId } = {}) => {
+      if (!socket.data.chats?.has(chatId)) return;
       socket.to(`chat:${chatId}`).emit('typing:stop', { userId: uid, chatId });
     });
 
@@ -64,7 +78,6 @@ const initSocket = (io) => {
       onlineUsers.get(uid)?.delete(socket.id);
       if (!onlineUsers.get(uid)?.size) {
         onlineUsers.delete(uid);
-        io.emit('user:offline', { userId: uid });
         prisma.user.update({ where: { id: uid }, data: { lastActiveAt: new Date() } }).catch(() => {});
       }
       logger.info(`Socket disconnected: ${uid}`);
@@ -76,4 +89,9 @@ const initSocket = (io) => {
 
 const isOnline = (userId) => onlineUsers.has(userId);
 
-module.exports = { initSocket, isOnline };
+/** Ban / suspend: drop every live socket of this user right away */
+const disconnectUser = (io, userId) => {
+  io?.in(`user:${userId}`).disconnectSockets(true);
+};
+
+module.exports = { initSocket, isOnline, disconnectUser };

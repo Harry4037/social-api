@@ -1,5 +1,6 @@
 'use strict';
 const jwt = require('jsonwebtoken');
+const crypto = require('crypto');
 
 const signAccess = (payload) =>
   jwt.sign(payload, process.env.JWT_ACCESS_SECRET, {
@@ -16,7 +17,9 @@ const verifyRefresh = (token) => jwt.verify(token, process.env.JWT_REFRESH_SECRE
 
 const issueTokenPair = (user) => ({
   accessToken:  signAccess ({ sub: user.id, email: user.email, plan: user.subscriptionPlan }),
-  refreshToken: signRefresh({ sub: user.id }),
+  // jti makes every refresh token unique — two logins/refreshes in the same
+  // second used to produce the SAME token, so a "rotated" token kept working
+  refreshToken: signRefresh({ sub: user.id, jti: crypto.randomUUID() }),
 });
 
 module.exports = { signAccess, signRefresh, verifyAccess, verifyRefresh, issueTokenPair };

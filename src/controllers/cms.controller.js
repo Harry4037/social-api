@@ -78,8 +78,8 @@ const getArticles = async (req, res, next) => {
 
 const getArticle = async (req, res, next) => {
   try {
-    const article = await prisma.blogArticle.findUnique({
-      where: { id: req.params.id },
+    const article = await prisma.blogArticle.findFirst({
+      where: { id: req.params.id, ...(req.publicOnly ? { status: 'published' } : {}) },
       include: { author: { select: { id: true, name: true } } },
     });
     if (!article) return res_.error(res, 'Article not found', 404);

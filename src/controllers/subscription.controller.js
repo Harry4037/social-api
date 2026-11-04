@@ -77,48 +77,97 @@ const verifyPayment = async (req, res, next) => {
       .update(body)
       .digest('hex');
 
-    if (expected !== razorpay_signature) {
+    const a = Buffer.from(expected), b = Buffer.from(String(razorpay_signature || ''));
+    if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) {
       return res_.error(res, 'Payment signature mismatch — possible tampering', 400);
     }
 
+    // The order must belong to the logged-in user
     const order = await prisma.order.findFirst({
-      where:   { razorpayOrderId: razorpay_order_id },
+      where:   { razorpayOrderId: razorpay_order_id, userId: req.user.id },
       include: { plan: true },
     });
     if (!order) return res_.error(res, 'Order not found', 404);
 
-    // Idempotency — already verified
-    if (order.status === 'paid') {
-      return res_.success(res, { alreadyProcessed: true }, 'Payment already processed');
-    }
-
-    const expiry = new Date();
-    if (order.plan.interval === 'yearly') {
-      expiry.setFullYear(expiry.getFullYear() + 1);
-    } else {
-      expiry.setMonth(expiry.getMonth() + 1);
-    }
-
-    await prisma.$transaction([
-      prisma.order.update({
-        where: { id: order.id },
-        data:  { status: 'paid', razorpayPaymentId: razorpay_payment_id, razorpaySignature: razorpay_signature },
-      }),
-      prisma.user.update({
-        where: { id: req.user.id },
-        data:  { subscriptionPlan: order.plan.slug, subscriptionExpiry: expiry },
-      }),
-    ]);
-
-    await notifSvc.create({
-      userId:  req.user.id,
-      type:    'subscription',
-      title:   `Welcome to ${order.plan.name}! 🏆`,
-      message: `Your ${order.plan.name} subscription is now active.`,
-    });
-
-    return res_.success(res, { verified: true, plan: order.plan.slug }, 'Payment verified');
+    if (!order.plan && order.type !== 'tokens') return res_.error(res, 'Order has no plan', 400);
+    const r = await fulfillOrder(order, razorpay_payment_id, razorpay_signature);
+    if (r.already) return res_.success(res, { alreadyProcessed: true }, 'Payment already processed');
+    return res_.success(res, { verified: true, ...r.result }, 'Payment verified');
   } catch (e) { next(e); }
+};
+
+// Credit a paid order — exactly once, whoever gets here first
+// (the app's verify-payment, or Razorpay's webhook).
+const fulfillOrder = async (order, paymentId, signature = null) => {
+  const claim = await prisma.order.updateMany({
+    where: { id: order.id, status: { not: 'paid' } },
+    data:  { status: 'paid', razorpayPaymentId: paymentId, ...(signature && { razorpaySignature: signature }) },
+  });
+  if (claim.count === 0) return { already: true };
+
+  if (order.type === 'tokens') {
+    const tokens = Number(order.tokenPack) || 0;
+    await prisma.user.update({ where: { id: order.userId }, data: { chatTokens: { increment: tokens } } });
+    await notifSvc.create({
+      userId: order.userId, type: 'token',
+      title: `+${tokens} chat tokens 🎉`, message: 'Your tokens are ready to use.',
+    });
+    return { already: false, result: { tokensAdded: tokens } };
+  }
+  const expiry = new Date();
+  if (order.plan.interval === 'yearly') expiry.setFullYear(expiry.getFullYear() + 1);
+  else expiry.setMonth(expiry.getMonth() + 1);
+  await prisma.user.update({
+    where: { id: order.userId },
+    data:  { subscriptionPlan: order.plan.slug, subscriptionExpiry: expiry },
+  });
+  await notifSvc.create({
+    userId:  order.userId, type: 'subscription',
+    title:   `Welcome to ${order.plan.name}! 🏆`,
+    message: `Your ${order.plan.name} subscription is now active.`,
+  });
+  return { already: false, result: { plan: order.plan.slug } };
+};
+
+// POST /subscriptions/webhook  (Razorpay → server, no login)
+// Dashboard → Webhooks: URL …/api/v1/subscriptions/webhook, events
+// payment.captured + order.paid, secret = RAZORPAY_WEBHOOK_SECRET.
+// Covers "paid, then the app closed before verify-payment".
+const webhook = async (req, res) => {
+  const secret = process.env.RAZORPAY_WEBHOOK_SECRET;
+  if (!secret) return res.status(503).json({ success: false, message: 'Webhook not configured' });
+  const raw = req.rawBody || Buffer.from(JSON.stringify(req.body || {}));
+  const expected = crypto.createHmac('sha256', secret).update(raw).digest('hex');
+  const got = Buffer.from(String(req.get('X-Razorpay-Signature') || ''));
+  const exp = Buffer.from(expected);
+  if (got.length !== exp.length || !crypto.timingSafeEqual(got, exp)) {
+    return res.status(400).json({ success: false, message: 'Bad signature' });
+  }
+  const type = req.body?.event;
+  const eventId = String(req.get('X-Razorpay-Event-Id') ||
+    crypto.createHash('sha256').update(raw).digest('hex')).slice(0, 100);
+  // Razorpay re-sends the same event until it gets a 2xx → handle it once
+  let rec;
+  try {
+    rec = await prisma.webhookEvent.create({ data: { provider: 'razorpay', eventId, type: String(type || '').slice(0, 60) } });
+  } catch (e) {
+    if (e.code === 'P2002') return res.json({ success: true, duplicate: true });
+    throw e;
+  }
+  try {
+    if (type === 'payment.captured' || type === 'order.paid') {
+      const pay = req.body?.payload?.payment?.entity || {};
+      const orderId = pay.order_id || req.body?.payload?.order?.entity?.id;
+      const order = orderId && await prisma.order.findUnique({ where: { razorpayOrderId: orderId }, include: { plan: true } });
+      if (order && (order.type === 'tokens' || order.plan)) await fulfillOrder(order, pay.id || null);
+    }
+    return res.json({ success: true });
+  } catch (e) {
+    // forget the event so Razorpay's retry is processed
+    await prisma.webhookEvent.delete({ where: { id: rec.id } }).catch(() => {});
+    console.error('[razorpay webhook]', e.message);
+    return res.status(500).json({ success: false });
+  }
 };
 
 // POST /tokens/buy
@@ -159,4 +208,4 @@ const buyTokens = async (req, res, next) => {
   } catch (e) { next(e); }
 };
 
-module.exports = { getPlans, createOrder, verifyPayment, buyTokens };
+module.exports = { getPlans, createOrder, verifyPayment, buyTokens, webhook, fulfillOrder };

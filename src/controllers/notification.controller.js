@@ -5,8 +5,7 @@ const res_   = require('../utils/response');
 // GET /notifications
 const getNotifications = async (req, res, next) => {
   try {
-    const { page = 1, limit = 30 } = req.query;
-    const skip = (Number(page) - 1) * Number(limit);
+    const { page, limit, skip } = require('../utils/paging').pageParams(req.query, { def: 30, max: 100 });
 
     const [notifications, total] = await Promise.all([
       prisma.notification.findMany({
