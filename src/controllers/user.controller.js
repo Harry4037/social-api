@@ -4,6 +4,15 @@ const { withUserCounts, withUserCount } = require('../utils/relationCounts');
 const { formatUser, formatBuddyProfile, PHOTOS_SELECT } = require('../utils/formatUser');
 const res_       = require('../utils/response');
 
+// Buddy Map Ghost Mode → until when you are hidden ('on' = until turned off)
+const GHOST_FOREVER = new Date('2999-12-31T00:00:00Z');
+const ghostUntilFor = (mode) => ({
+  off: null,
+  '3h':  new Date(Date.now() + 3 * 3600000),
+  '24h': new Date(Date.now() + 24 * 3600000),
+  on:  GHOST_FOREVER,
+}[mode] ?? null);
+
 // PUT /users/me
 const updateProfile = async (req, res, next) => {
   try {
@@ -12,7 +21,7 @@ const updateProfile = async (req, res, next) => {
       gender, primaryActivity, activities, experienceLevel, goals,
       primaryGym, latitude, longitude, instagramHandle, phone,
       avatarUrl, walkthroughSeen, searchRadius,
-      profileVisibility, shareLocation, showOnline,
+      profileVisibility, shareLocation, showOnline, ghostMode,
     } = req.body;
 
     // A verified Instagram handle can't be swapped for someone else's
@@ -56,6 +65,7 @@ const updateProfile = async (req, res, next) => {
         ...(searchRadius    !== undefined && { searchRadius: Number(searchRadius) }),
         ...(instagramHandle !== undefined && { instagramHandle }),
         ...(profileVisibility !== undefined && { profileVisibility }),
+        ...(ghostMode !== undefined && { mapGhostUntil: ghostUntilFor(ghostMode) }),
         ...(shareLocation   !== undefined && { shareLocation: !!shareLocation }),
         ...(showOnline      !== undefined && { showOnline: !!showOnline }),
       },
@@ -85,7 +95,17 @@ const getBuddyProfile = async (req, res, next) => {
           { userAId: req.user.id, userBId: user.id }, { userAId: user.id, userBId: req.user.id }] },
         select: { id: true },
       });
-      if (!buddy) return res_.error(res, 'User not found', 404);
+      // They sent me a request I haven't answered yet → I may look before
+      // I Accept/Decline. Once I answer (like = match, skip = no) their
+      // privacy applies again.
+      const pendingRequest = !buddy && await prisma.swipe.findFirst({
+        where: { swiperId: user.id, swipedId: req.user.id, action: { in: ['like', 'super_like'] } },
+        select: { id: true },
+      }) && !(await prisma.swipe.findFirst({
+        where: { swiperId: req.user.id, swipedId: user.id },
+        select: { id: true },
+      }));
+      if (!buddy && !pendingRequest) return res_.error(res, 'User not found', 404);
     }
 
     const me = await prisma.user.findUnique({ where: { id: req.user.id } });

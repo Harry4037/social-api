@@ -34,6 +34,8 @@ const formatUser = (u) => ({
   profileVisibility: u.profileVisibility ?? 'public',
   shareLocation:     u.shareLocation ?? true,
   showOnline:        u.showOnline ?? true,
+  ghostMode:         !!(u.mapGhostUntil && new Date(u.mapGhostUntil) > new Date()),
+  ghostUntil:        u.mapGhostUntil && new Date(u.mapGhostUntil) > new Date() ? u.mapGhostUntil : null,
   phone:             u.phone,
   bio:               u.bio,
   country:           u.country,

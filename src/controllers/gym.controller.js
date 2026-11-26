@@ -219,10 +219,16 @@ const _buddyIds = async (userId) => {
     .filter(id => id && !blocked.has(id));
 };
 
+// Ghost Mode users are left out of every buddy view of the map
+const notGhost = () => ({ OR: [{ mapGhostUntil: null }, { mapGhostUntil: { lte: new Date() } }] });
+
 const _activeCheckins = async (userIds) => {
   if (!userIds.length) return [];
   return prisma.gymCheckin.findMany({
-    where:   { userId: { in: userIds }, expiresAt: { gt: new Date() } },
+    where:   {
+      userId: { in: userIds }, expiresAt: { gt: new Date() },
+      user: { status: 'ACTIVE', isBanned: false, ...notGhost() },
+    },
     include: { user: { select: { id: true, firstName: true, lastName: true, avatarUrl: true } } },
     orderBy: { createdAt: 'desc' },
   });
@@ -277,13 +283,88 @@ const nearby = async (req, res, next) => {
       byPlace.get(c.placeId).push(_fmtCheckin(c));
     }
 
+    // Everyone training at these gyms now — a number only (no names)
+    const counts = new Map();
+    const placeIds = gyms.map(g => g.placeId).filter(Boolean);
+    if (placeIds.length) {
+      const rows = await prisma.gymCheckin.groupBy({
+        by: ['placeId', 'userId'], // one per person, even after 2 check-ins
+        where: {
+          placeId: { in: placeIds }, expiresAt: { gt: new Date() },
+          user: { status: 'ACTIVE', isBanned: false, ...notGhost() },
+        },
+        _count: { _all: true },
+      });
+      for (const r of rows) counts.set(r.placeId, (counts.get(r.placeId) || 0) + 1);
+    }
+
     return res_.success(res, {
       gyms: gyms.map(g => ({
         ...g,
         buddiesHere: byPlace.get(g.placeId) || [],
+        trainingNow: counts.get(g.placeId) || 0,
       })),
       source,
     });
+  } catch (e) { next(e); }
+};
+
+// ── Buddy Map ────────────────────────────────────────────
+// Never an exact position: a gym check-in shows the gym; otherwise a ~3 km
+// grid cell centre (people close together get the same point, so it can't
+// be used to triangulate). Buddies only, active in the last 24 h.
+const AREA_KM = 3;
+const AREA_ACTIVE_MS = 24 * 3600 * 1000;
+const areaPoint = (lat, lng) => {
+  const dLat = AREA_KM / 111.32;
+  const latC = (Math.floor(lat / dLat) + 0.5) * dLat;
+  const dLng = AREA_KM / (111.32 * Math.max(0.1, Math.cos(latC * Math.PI / 180)));
+  const lngC = (Math.floor(lng / dLng) + 0.5) * dLng;
+  return { lat: Number(latC.toFixed(5)), lng: Number(lngC.toFixed(5)) };
+};
+
+// GET /gyms/map
+const buddyMap = async (req, res, next) => {
+  try {
+    const ids = await _buddyIds(req.user.id);
+    const me = await prisma.user.findUnique({ where: { id: req.user.id }, select: { mapGhostUntil: true } });
+    const ghostUntil = me?.mapGhostUntil && me.mapGhostUntil > new Date() ? me.mapGhostUntil : null;
+    const out = [];
+    if (ids.length) {
+      const checkins = await _activeCheckins(ids);
+      const seen = new Set();
+      for (const c of checkins) {
+        if (seen.has(c.userId)) continue;
+        seen.add(c.userId);
+        out.push({
+          userId: c.userId, firstName: c.user?.firstName, avatarUrl: c.user?.avatarUrl ?? null,
+          trainingNow: true, precision: 'gym',
+          placeId: c.placeId, gymName: c.gymName,
+          lat: Number(c.latitude), lng: Number(c.longitude), at: c.createdAt,
+        });
+      }
+      const rest = ids.filter((id) => !seen.has(id));
+      if (rest.length) {
+        const users = await prisma.user.findMany({
+          where: {
+            id: { in: rest }, status: 'ACTIVE', isBanned: false, shareLocation: true,
+            latitude: { not: null }, longitude: { not: null },
+            lastActiveAt: { gt: new Date(Date.now() - AREA_ACTIVE_MS) },
+            ...notGhost(),
+          },
+          select: { id: true, firstName: true, avatarUrl: true, latitude: true, longitude: true, lastActiveAt: true },
+          take: 500,
+        });
+        for (const u of users) {
+          out.push({
+            userId: u.id, firstName: u.firstName, avatarUrl: u.avatarUrl ?? null,
+            trainingNow: false, precision: 'area', areaKm: AREA_KM,
+            ...areaPoint(Number(u.latitude), Number(u.longitude)), at: u.lastActiveAt,
+          });
+        }
+      }
+    }
+    return res_.success(res, { buddies: out, me: { ghostMode: !!ghostUntil, ghostUntil } });
   } catch (e) { next(e); }
 };
 
@@ -391,7 +472,7 @@ const cleanupCheckins = async () => {
 };
 
 module.exports = {
-  nearby, buddiesActive, myCheckin, checkIn, checkOut, cleanupCheckins,
+  nearby, buddiesActive, buddyMap, areaPoint, myCheckin, checkIn, checkOut, cleanupCheckins,
   fetchGooglePlaces, fetchOsmGyms,
   // for tests
   _mapOsm, _overpassQuery, _clearCache: () => { _cache.clear(); _failedAt.clear(); _inflight.clear(); },

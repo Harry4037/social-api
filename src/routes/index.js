@@ -56,6 +56,7 @@ userRouter.put('/me', authenticate, [
   body('searchRadius').optional().isInt({ min: 1, max: 500 }),
   body('profileVisibility').optional().isIn(['public', 'buddies', 'hidden']),
   body(['shareLocation', 'showOnline', 'walkthroughSeen']).optional().isBoolean(),
+  body('ghostMode').optional().isIn(['off', '3h', '24h', 'on']),
   body('primaryGym').optional({ nullable: true }).trim().isLength({ max: 120 }),
   body('instagramHandle').optional({ nullable: true }).trim().isLength({ max: 60 }),
   body('phone').optional({ nullable: true }).trim().isLength({ max: 20 }),
@@ -342,6 +343,7 @@ gymRouter.get('/nearby', authenticate, [
   query('radius').optional().isInt({ min: 100, max: 50000 }),
 ], validate, gymCtrl.nearby);
 gymRouter.get('/buddies', authenticate, gymCtrl.buddiesActive);
+gymRouter.get('/map', authenticate, gymCtrl.buddyMap); // Buddy Map
 gymRouter.get('/checkin/me', authenticate, gymCtrl.myCheckin);
 gymRouter.post('/checkin', authenticate, [
   body('placeId').isString().notEmpty(),

@@ -104,6 +104,7 @@ model User {
   profileVisibility String  @default("public")
   shareLocation     Boolean @default(true) // false → nobody sees your distance
   showOnline        Boolean @default(true) // false → never shown as "online"
+  mapGhostUntil     DateTime? // Buddy Map Ghost Mode: hidden while this is in the future
 
   // Gamification
   xpTotal    Int     @default(0)
